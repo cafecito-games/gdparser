@@ -5,14 +5,14 @@
 
 `gdparser` is an open-source Go 1.26 library for parsing and transforming Godot
 4 source and text formats. It provides typed, mutable trees and canonical
-emitters for GDScript, text scenes and resources, project settings, and the
-Godot shading language. The repository also includes a CLI for printing trees,
-JSON, or canonical source.
+emitters for GDScript, text scenes and resources, ConfigFile documents,
+resource UID sidecars, and the Godot shading language. The repository also
+includes a CLI for printing trees, JSON, or canonical source.
 
 ## Status
 
 The GDScript parser is validated against a compatibility corpus of 2,000 files
-totaling roughly 414,000 lines. The text-resource, project-configuration, and
+totaling roughly 414,000 lines. The text-resource, ConfigFile, UID-sidecar, and
 shader parsers are also exercised against representative Godot projects. Corpus
 validation covers parsing, canonical formatting, reparsing, and normalized
 structural comparison.
@@ -82,16 +82,20 @@ accidentally mixed:
 scene, err := textresource.ParseFile("level.tscn", sceneSource)
 sceneSource = []byte(textresource.Format(scene))
 
-project, err := projectconfig.ParseFile("project.godot", projectSource)
-projectSource = []byte(projectconfig.Format(project))
+config, err := configfile.ParseFile("project.godot", configSource)
+configSource = []byte(configfile.Format(config))
 
 program, err := shader.ParseFile("water.gdshader", shaderSource)
 shaderSource = []byte(shader.Format(program))
+
+uid, err := uidfile.ParseFile("player.gd.uid", uidSource)
+uidSource = []byte(uidfile.Format(uid))
 ```
 
 Import these packages from `github.com/cafecito-games/gdparser/textresource`,
-`github.com/cafecito-games/gdparser/projectconfig`, and
-`github.com/cafecito-games/gdparser/shader`.
+`github.com/cafecito-games/gdparser/configfile`,
+`github.com/cafecito-games/gdparser/shader`, and
+`github.com/cafecito-games/gdparser/uidfile`.
 
 For backward compatibility, the root package exposes the GDScript entry points:
 
@@ -108,13 +112,16 @@ Lower-level packages are available when a tool needs more control:
 - `format` emits canonical GDScript.
 - `token` defines token kinds and source positions.
 - `textresource` parses the shared `.tscn`, `.tres`, and `.escn` syntax.
-- `projectconfig` parses ConfigFile syntax used by `project.godot`.
+- `configfile` parses ConfigFile syntax used by `project.godot`, `.cfg`,
+  `.gdextension`, `.import`, and `.remap` files.
 - `shader` parses `.gdshader` and `.gdshaderinc` source.
+- `uidfile` parses `.uid` sidecars used by source resources.
 
 ## CLI
 
-The CLI infers the input type from `.gd`, `.tscn`, `.tres`, `.escn`,
-`.gdshader`, `.gdshaderinc`, or the `project.godot` filename.
+The CLI infers the input type from `.gd`, `.tscn`, `.tres`, `.escn`, `.cfg`,
+`.gdextension`, `.import`, `.remap`, `.gdshader`, `.gdshaderinc`, `.uid`, or
+the `project.godot` filename.
 
 Print a readable syntax tree:
 
@@ -143,8 +150,9 @@ to GDScript; use `-type` for another format:
 ```sh
 printf 'var answer = 42\n' | gdparser -format json
 gdparser -type resource -format json < level.tscn
-gdparser -type project -format source < project.godot
+gdparser -type config -format source < project.godot
 gdparser -type shader -format tree < water.gdshader
+gdparser -type uid -format json < player.gd.uid
 ```
 
 The legacy `-format gdscript` spelling remains an alias for `-format source`.
@@ -177,11 +185,18 @@ properties, comments, recursive Variant values, constructors and resource
 references, arrays and dictionaries, typed containers, `StringName`,
 `NodePath`, special floating-point values, and suffixed integers.
 
-### Project configuration
+### ConfigFile documents
 
-The `projectconfig` package supports ordered preamble assignments and sections,
+The `configfile` package supports ordered preamble assignments and sections,
 semicolon and hash comments, slash-delimited and quoted keys, escaped section
-names, and recursive ConfigFile Variant values including `Object(...)` forms.
+names, physical multiline strings, and recursive ConfigFile Variant values
+including `Object(...)` forms. It covers project settings, export presets,
+plugin and GDExtension descriptors, import metadata, and resource remaps.
+
+### Resource UID sidecars
+
+The `uidfile` package validates, represents, traverses, and canonically emits
+the single `uid://...` identifier stored in `.uid` sidecars.
 
 ### Shaders
 

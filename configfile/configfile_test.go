@@ -1,4 +1,4 @@
-package projectconfig_test
+package configfile_test
 
 import (
 	"bytes"
@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cafecito-games/gdparser/projectconfig"
-	"github.com/cafecito-games/gdparser/projectconfig/ast"
-	configparser "github.com/cafecito-games/gdparser/projectconfig/parser"
+	"github.com/cafecito-games/gdparser/configfile"
+	"github.com/cafecito-games/gdparser/configfile/ast"
+	configparser "github.com/cafecito-games/gdparser/configfile/parser"
 )
 
 const representativeConfig = `; Engine configuration file.
@@ -32,7 +32,7 @@ limits=[null, true, false, -inf, nan, SOME_SETTING]
 `
 
 func TestParseFormatReparseRepresentativeProject(t *testing.T) {
-	file, err := projectconfig.ParseFile("project.godot", []byte(representativeConfig))
+	file, err := configfile.ParseFile("project.godot", []byte(representativeConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestParseFormatReparseRepresentativeProject(t *testing.T) {
 		t.Fatalf("Object constructor = %#v", object)
 	}
 
-	formatted := projectconfig.Format(file)
+	formatted := configfile.Format(file)
 	for _, want := range []string{
 		"config_version=5\n",
 		"[application]\n",
@@ -73,21 +73,21 @@ func TestParseFormatReparseRepresentativeProject(t *testing.T) {
 			t.Errorf("formatted output missing %q:\n%s", want, formatted)
 		}
 	}
-	reparsed, err := projectconfig.ParseString(formatted)
+	reparsed, err := configfile.ParseString(formatted)
 	if err != nil {
 		t.Fatalf("reparse canonical output: %v\n%s", err, formatted)
 	}
 	if len(reparsed.Sections) != len(file.Sections) {
 		t.Fatalf("reparsed sections = %d", len(reparsed.Sections))
 	}
-	if again := projectconfig.Format(reparsed); again != formatted {
+	if again := configfile.Format(reparsed); again != formatted {
 		t.Fatalf("format is not idempotent\nfirst:\n%s\nsecond:\n%s", formatted, again)
 	}
 }
 
 func TestSpansAreByteBasedAndOneBased(t *testing.T) {
 	source := "# café\n[rénder]\nwindow/size=Vector2i(1280, 720)\n"
-	file, err := projectconfig.ParseString(source)
+	file, err := configfile.ParseString(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestSpansAreByteBasedAndOneBased(t *testing.T) {
 }
 
 func TestTraversalJSONDumpAndMutation(t *testing.T) {
-	file, err := projectconfig.ParseString("config_version=5\n\n[application]\nconfig/name=\"Old\"\n")
+	file, err := configfile.ParseString("config_version=5\n\n[application]\nconfig/name=\"Old\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestTraversalJSONDumpAndMutation(t *testing.T) {
 	if visited != 6 { // File, section, two assignments, and their values.
 		t.Fatalf("visited = %d", visited)
 	}
-	if got := projectconfig.Format(file); !strings.Contains(got, `config/name="New"`) {
+	if got := configfile.Format(file); !strings.Contains(got, `config/name="New"`) {
 		t.Fatalf("mutation was not formatted:\n%s", got)
 	}
 	json := ast.JSONValue(file).(map[string]any)
@@ -149,7 +149,7 @@ func TestTraversalJSONDumpAndMutation(t *testing.T) {
 
 func TestQuotedKeysEscapedSectionsAndStrings(t *testing.T) {
 	source := "[section\\]name with spaces]\n\"key with spaces\"=\"line\\nquote: \\\" slash: \\\\ snowman: ☃\"\n"
-	file, err := projectconfig.ParseString(source)
+	file, err := configfile.ParseString(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,9 +160,47 @@ func TestQuotedKeysEscapedSectionsAndStrings(t *testing.T) {
 	if assignment.Key != "key with spaces" {
 		t.Fatalf("key = %q", assignment.Key)
 	}
-	formatted := projectconfig.Format(file)
-	if _, err := projectconfig.ParseString(formatted); err != nil {
+	formatted := configfile.Format(file)
+	if _, err := configfile.ParseString(formatted); err != nil {
 		t.Fatalf("parse escaped canonical output: %v\n%s", err, formatted)
+	}
+}
+
+func TestPhysicalNewlinesInQuotedStrings(t *testing.T) {
+	source := `[preset.0.options]
+ssh_remote_deploy/run_script="#!/usr/bin/env bash
+unzip -o -q \"{archive_name}\"
+open \"{exe_name}.app\""
+after="value"
+`
+	file, err := configfile.ParseFile("export_presets.cfg", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := file.Sections[0].Statements[0].(*ast.Assignment)
+	literal := assignment.Value.(*ast.StringLiteral)
+	want := "#!/usr/bin/env bash\nunzip -o -q \"{archive_name}\"\nopen \"{exe_name}.app\""
+	if literal.Value != want {
+		t.Fatalf("multiline value = %q, want %q", literal.Value, want)
+	}
+	if got := file.Sections[0].Statements[1].Span().Start; got.Line != 5 || got.Column != 1 {
+		t.Fatalf("following assignment starts at %#v", got)
+	}
+
+	formatted := configfile.Format(file)
+	if strings.Contains(formatted, "#!/usr/bin/env bash\nunzip") {
+		t.Fatalf("canonical output should escape physical newlines:\n%s", formatted)
+	}
+	if !strings.Contains(formatted, `run_script="#!/usr/bin/env bash\nunzip`) {
+		t.Fatalf("canonical output missing escaped multiline value:\n%s", formatted)
+	}
+	reparsed, err := configfile.ParseString(formatted)
+	if err != nil {
+		t.Fatalf("reparse canonical output: %v\n%s", err, formatted)
+	}
+	got := reparsed.Sections[0].Statements[0].(*ast.Assignment).Value.(*ast.StringLiteral).Value
+	if got != want {
+		t.Fatalf("reparsed multiline value = %q, want %q", got, want)
 	}
 }
 
@@ -188,7 +226,7 @@ InputEventKey,
 # after property
 )
 `
-	file, err := projectconfig.ParseString(source)
+	file, err := configfile.ParseString(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,17 +263,17 @@ InputEventKey,
 		t.Fatalf("comments in traversal order = %#v", comments)
 	}
 
-	formatted := projectconfig.Format(file)
+	formatted := configfile.Format(file)
 	for _, comment := range wantComments {
 		if strings.Count(formatted, comment) != 1 {
 			t.Errorf("formatted comment %q count != 1:\n%s", comment, formatted)
 		}
 	}
-	reparsed, err := projectconfig.ParseString(formatted)
+	reparsed, err := configfile.ParseString(formatted)
 	if err != nil {
 		t.Fatalf("reparse typed/comment output: %v\n%s", err, formatted)
 	}
-	if again := projectconfig.Format(reparsed); again != formatted {
+	if again := configfile.Format(reparsed); again != formatted {
 		t.Fatalf("typed/comment format is not idempotent\nfirst:\n%s\nsecond:\n%s", formatted, again)
 	}
 	comments = nil
@@ -266,7 +304,7 @@ func TestPositionedErrorsDoNotPanic(t *testing.T) {
 					t.Fatalf("panic: %v", recovered)
 				}
 			}()
-			_, err := projectconfig.ParseFile("broken.godot", []byte(source))
+			_, err := configfile.ParseFile("broken.godot", []byte(source))
 			if err == nil {
 				t.Fatal("expected an error")
 			}

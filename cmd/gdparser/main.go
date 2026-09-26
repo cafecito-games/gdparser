@@ -13,11 +13,12 @@ import (
 
 	"github.com/cafecito-games/gdparser"
 	"github.com/cafecito-games/gdparser/ast"
-	"github.com/cafecito-games/gdparser/projectconfig"
-	projectast "github.com/cafecito-games/gdparser/projectconfig/ast"
+	"github.com/cafecito-games/gdparser/configfile"
+	configast "github.com/cafecito-games/gdparser/configfile/ast"
 	"github.com/cafecito-games/gdparser/shader"
 	shaderast "github.com/cafecito-games/gdparser/shader/ast"
 	"github.com/cafecito-games/gdparser/textresource"
+	"github.com/cafecito-games/gdparser/uidfile"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
@@ -26,9 +27,9 @@ func run(arguments []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("gdparser", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	outputFormat := flags.String("format", "tree", "output format: tree, json, or source")
-	inputType := flags.String("type", "auto", "input type: auto, gdscript, resource, project, or shader")
+	inputType := flags.String("type", "auto", "input type: auto, gdscript, resource, config, shader, or uid")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: gdparser [-type auto|gdscript|resource|project|shader] [-format tree|json|source] [file|-]")
+		fmt.Fprintln(stderr, "Usage: gdparser [-type auto|gdscript|resource|config|shader|uid] [-format tree|json|source] [file|-]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(arguments); err != nil {
@@ -122,15 +123,15 @@ func parseInput(kind, filename string, source []byte) (parsedDocument, error) {
 			json:   func() any { return textresource.JSONValue(file) },
 			source: func() string { return textresource.Format(file) },
 		}, nil
-	case "project", "projectconfig":
-		file, err := projectconfig.ParseFile(filename, source)
+	case "config", "configfile":
+		file, err := configfile.ParseFile(filename, source)
 		if err != nil {
 			return parsedDocument{}, err
 		}
 		return parsedDocument{
-			dump:   func(writer io.Writer) error { return projectast.Dump(writer, file) },
-			json:   func() any { return projectast.JSONValue(file) },
-			source: func() string { return projectconfig.Format(file) },
+			dump:   func(writer io.Writer) error { return configast.Dump(writer, file) },
+			json:   func() any { return configast.JSONValue(file) },
+			source: func() string { return configfile.Format(file) },
 		}, nil
 	case "shader":
 		file, err := shader.ParseFile(filename, source)
@@ -142,6 +143,16 @@ func parseInput(kind, filename string, source []byte) (parsedDocument, error) {
 			json:   func() any { return shaderast.JSONValue(file) },
 			source: func() string { return shader.Format(file) },
 		}, nil
+	case "uid":
+		file, err := uidfile.ParseFile(filename, source)
+		if err != nil {
+			return parsedDocument{}, err
+		}
+		return parsedDocument{
+			dump:   func(writer io.Writer) error { return uidfile.Dump(writer, file) },
+			json:   func() any { return uidfile.JSONValue(file) },
+			source: func() string { return uidfile.Format(file) },
+		}, nil
 	default:
 		return parsedDocument{}, fmt.Errorf("unknown input type %q", kind)
 	}
@@ -149,13 +160,17 @@ func parseInput(kind, filename string, source []byte) (parsedDocument, error) {
 
 func inferInputType(filename string) string {
 	if filepath.Base(filename) == "project.godot" {
-		return "project"
+		return "config"
 	}
 	switch strings.ToLower(filepath.Ext(filename)) {
 	case ".tscn", ".tres", ".escn":
 		return "resource"
 	case ".gdshader", ".gdshaderinc":
 		return "shader"
+	case ".cfg", ".gdextension", ".import", ".remap":
+		return "config"
+	case ".uid":
+		return "uid"
 	default:
 		// Standard input and unknown extensions retain the original behavior.
 		return "gdscript"
@@ -164,7 +179,7 @@ func inferInputType(filename string) string {
 
 func validInputType(kind string) bool {
 	switch kind {
-	case "auto", "gdscript", "resource", "textresource", "project", "projectconfig", "shader":
+	case "auto", "gdscript", "resource", "textresource", "config", "configfile", "shader", "uid":
 		return true
 	default:
 		return false

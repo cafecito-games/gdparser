@@ -1,8 +1,8 @@
 // Package ast defines the typed, mutable abstract syntax tree for Godot
-// project configuration files.
+// ConfigFile documents, including project.godot.
 package ast
 
-import "github.com/cafecito-games/gdparser/projectconfig/token"
+import "github.com/cafecito-games/gdparser/configfile/token"
 
 // Node is implemented by every AST node.
 type Node interface {
@@ -47,8 +47,8 @@ type Base struct {
 
 func (b Base) Span() token.Span { return b.SourceSpan }
 
-// File is one parsed project.godot-style configuration file. Preamble holds
-// assignments and comments before the first section.
+// File is one parsed ConfigFile document. Preamble holds assignments and
+// comments before the first section.
 type File struct {
 	Base
 	Name     string      `json:"name,omitempty"`

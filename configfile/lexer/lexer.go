@@ -1,4 +1,4 @@
-// Package lexer tokenizes Godot ConfigFile/project.godot syntax.
+// Package lexer tokenizes Godot ConfigFile syntax.
 package lexer
 
 import (
@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/cafecito-games/gdparser/projectconfig/token"
+	"github.com/cafecito-games/gdparser/configfile/token"
 )
 
 // Error describes invalid source encountered by the lexer.
@@ -101,9 +101,6 @@ func (l *lexer) scanString(start token.Position) error {
 				return nil
 			}
 			continue
-		}
-		if l.peek() == '\n' && !triple {
-			return &Error{Position: start, Message: "unterminated string literal"}
 		}
 		l.advance()
 	}

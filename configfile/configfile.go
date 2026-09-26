@@ -1,11 +1,11 @@
-// Package projectconfig parses, transforms, and formats Godot 4 ConfigFile
+// Package configfile parses, transforms, and formats Godot 4 ConfigFile
 // syntax, including project.godot files.
-package projectconfig
+package configfile
 
 import (
-	"github.com/cafecito-games/gdparser/projectconfig/ast"
-	configformat "github.com/cafecito-games/gdparser/projectconfig/format"
-	"github.com/cafecito-games/gdparser/projectconfig/parser"
+	"github.com/cafecito-games/gdparser/configfile/ast"
+	configformat "github.com/cafecito-games/gdparser/configfile/format"
+	"github.com/cafecito-games/gdparser/configfile/parser"
 )
 
 // Parse parses source without attaching a filename to diagnostics.

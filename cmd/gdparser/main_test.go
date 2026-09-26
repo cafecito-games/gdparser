@@ -70,9 +70,9 @@ func TestRunShaderJSON(t *testing.T) {
 	}
 }
 
-func TestRunDetectsProjectGodot(t *testing.T) {
+func TestRunDetectsConfigFile(t *testing.T) {
 	directory := t.TempDir()
-	path := filepath.Join(directory, "project.godot")
+	path := filepath.Join(directory, "plugin.cfg")
 	if err := os.WriteFile(path, []byte("config_version=5\n\n[application]\nconfig/name=\"Demo\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +86,35 @@ func TestRunDetectsProjectGodot(t *testing.T) {
 	}
 }
 
+func TestRunDetectsUIDFile(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "player.gd.uid")
+	if err := os.WriteFile(path, []byte("uid://c3m2k2i8we5da\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	status := run([]string{"-format", "json", path}, strings.NewReader(""), &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("status %d: %s", status, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"kind": "UID"`) || !strings.Contains(stdout.String(), `"value": "uid://c3m2k2i8we5da"`) {
+		t.Fatalf("output:\n%s", stdout.String())
+	}
+}
+
 func TestInferInputType(t *testing.T) {
 	tests := map[string]string{
 		"player.gd":          "gdscript",
 		"level.tscn":         "resource",
 		"theme.tres":         "resource",
 		"import.escn":        "resource",
-		"project.godot":      "project",
+		"project.godot":      "config",
+		"export_presets.cfg": "config",
+		"plugin.cfg":         "config",
+		"native.gdextension": "config",
+		"icon.svg.import":    "config",
+		"main.tscn.remap":    "config",
+		"player.gd.uid":      "uid",
 		"water.gdshader":     "shader",
 		"common.gdshaderinc": "shader",
 		"-":                  "gdscript",

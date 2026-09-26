@@ -16,8 +16,10 @@ thin user-facing adapter.
 - `gdparser.go`: backward-compatible GDScript convenience API.
 - `token/`, `lexer/`, `ast/`, `parser/`, `format/`: the GDScript pipeline.
 - `textresource/`: text scene/resource parsing and canonical emission.
-- `projectconfig/`: `project.godot` parsing and canonical emission.
+- `configfile/`: ConfigFile parsing and canonical emission for `project.godot`,
+  `.cfg`, `.gdextension`, `.import`, and `.remap` files.
 - `shader/`: Godot shading-language parsing and canonical emission.
+- `uidfile/`: resource UID sidecar parsing and canonical emission.
 - `cmd/gdparser/`: command-line interface.
 - `corpus_test.go`: opt-in external corpus validation.
 
@@ -99,8 +101,11 @@ unit tests. Treat it as read-only and do not modify it to make a test pass.
 - Statement changes should cover nested suites and adjacent comments.
 - Text-resource changes should cover scene and resource headers, ordered
   sections and properties, resource references, and recursive Variant values.
-- Project configuration changes should cover preamble properties, sections,
-  slash-delimited keys, comments, and recursive Variant values.
+- ConfigFile changes should cover preamble properties, sections,
+  slash-delimited keys, comments, multiline strings, and recursive Variant
+  values.
+- UID-sidecar changes should cover validation, positions, traversal, and
+  canonical emission.
 - Shader changes should cover declarations, blocks, control flow, preprocessing,
   precedence, associativity, grouping, and formatted output.
 - AST changes should cover traversal and JSON output as well as parsing.
