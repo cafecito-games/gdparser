@@ -1,0 +1,247 @@
+// Package parser parses GDScript tokens into a typed AST.
+package parser
+
+import (
+	"fmt"
+
+	"github.com/cafecito-games/gdparser/ast"
+	"github.com/cafecito-games/gdparser/lexer"
+	"github.com/cafecito-games/gdparser/token"
+)
+
+// Error is a syntax error with a source position.
+type Error struct {
+	Filename string
+	Token    token.Token
+	Message  string
+}
+
+func (e *Error) Error() string {
+	location := e.Token.Span.Start.String()
+	if e.Filename != "" {
+		location = e.Filename + ":" + location
+	}
+	return fmt.Sprintf("%s: %s (found %s)", location, e.Message, e.Token)
+}
+
+// Parse parses one GDScript source file.
+func Parse(filename string, source []byte) (*ast.File, error) {
+	tokens, err := lexer.Lex(source)
+	if err != nil {
+		if filename != "" {
+			return nil, fmt.Errorf("%s:%w", filename, err)
+		}
+		return nil, err
+	}
+	p := &parser{filename: filename, tokens: tokens}
+	statements, err := p.parseStatements(false)
+	if err != nil {
+		return nil, err
+	}
+	file := &ast.File{Name: filename, Statements: statements}
+	if len(tokens) > 0 {
+		file.SourceSpan = token.Span{Start: tokens[0].Span.Start, End: tokens[len(tokens)-1].Span.End}
+	}
+	return file, nil
+}
+
+type parser struct {
+	filename string
+	tokens   []token.Token
+	current  int
+}
+
+func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
+	var statements []ast.Statement
+	for !p.at(token.EOF) {
+		for p.match(token.Newline) {
+		}
+		if block && p.match(token.Dedent) {
+			return statements, nil
+		}
+		if p.at(token.EOF) {
+			break
+		}
+		if p.at(token.Dedent) {
+			return nil, p.error(p.peek(), "unexpected dedent")
+		}
+
+		stmt, compound, err := p.parseStatement()
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, stmt)
+		if compound {
+			continue
+		}
+		if p.at(token.Comment) {
+			comment := p.advance()
+			statements = append(statements, commentNode(comment))
+		}
+		if _, err := p.expect(token.Newline, "expected end of line"); err != nil {
+			return nil, err
+		}
+	}
+	if block {
+		return nil, p.error(p.peek(), "expected an indented block")
+	}
+	return statements, nil
+}
+
+func (p *parser) parseStatement() (ast.Statement, bool, error) {
+	switch p.peek().Type {
+	case token.Comment:
+		return commentNode(p.advance()), false, nil
+	case token.At:
+		stmt, err := p.parseAnnotation()
+		return stmt, !p.at(token.Newline) && !p.at(token.Comment), err
+	case token.Tool:
+		tok := p.advance()
+		return &ast.Directive{Base: base(tok.Span), Name: tok.Lexeme}, false, nil
+	case token.Extends, token.ClassName:
+		stmt, err := p.parseDirective()
+		return stmt, false, err
+	case token.Var, token.Const:
+		stmt, err := p.parseVariable()
+		return stmt, false, err
+	case token.Static:
+		start := p.advance()
+		if _, err := p.expect(token.Func, "expected func after static"); err != nil {
+			return nil, false, err
+		}
+		stmt, err := p.parseFunction(start, true)
+		return stmt, true, err
+	case token.Func:
+		start := p.advance()
+		stmt, err := p.parseFunction(start, false)
+		return stmt, true, err
+	case token.Class:
+		stmt, err := p.parseClass()
+		return stmt, true, err
+	case token.Signal:
+		stmt, err := p.parseSignal()
+		return stmt, false, err
+	case token.Enum:
+		stmt, err := p.parseEnum()
+		return stmt, false, err
+	case token.If:
+		stmt, err := p.parseIf()
+		return stmt, true, err
+	case token.While:
+		stmt, err := p.parseWhile()
+		return stmt, true, err
+	case token.For:
+		stmt, err := p.parseFor()
+		return stmt, true, err
+	case token.Match:
+		stmt, err := p.parseMatch()
+		return stmt, true, err
+	case token.Return:
+		stmt, err := p.parseReturn()
+		return stmt, false, err
+	case token.Pass, token.Break, token.Continue:
+		tok := p.advance()
+		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme}, false, nil
+	default:
+		stmt, err := p.parseExpressionStatement()
+		return stmt, false, err
+	}
+}
+
+func (p *parser) parseSuite() ([]ast.Statement, token.Position, error) {
+	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
+		return nil, token.Position{}, err
+	}
+	if p.match(token.Pass) {
+		end := p.previous().Span.End
+		return []ast.Statement{&ast.KeywordStatement{Base: base(p.previous().Span), Keyword: "pass"}}, end, nil
+	}
+	if _, err := p.expect(token.Newline, "expected newline before block"); err != nil {
+		return nil, token.Position{}, err
+	}
+	var leading []ast.Statement
+	for {
+		for p.match(token.Newline) {
+		}
+		if !p.at(token.Comment) {
+			break
+		}
+		leading = append(leading, commentNode(p.advance()))
+		if _, err := p.expect(token.Newline, "expected end of comment line"); err != nil {
+			return nil, token.Position{}, err
+		}
+	}
+	if _, err := p.expect(token.Indent, "expected an indented block"); err != nil {
+		return nil, token.Position{}, err
+	}
+	body, err := p.parseStatements(true)
+	if err != nil {
+		return nil, token.Position{}, err
+	}
+	end := p.previous().Span.End
+	return append(leading, body...), end, nil
+}
+
+func (p *parser) at(types ...token.Type) bool {
+	current := p.peek().Type
+	for _, typ := range types {
+		if current == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *parser) match(types ...token.Type) bool {
+	if p.at(types...) {
+		p.advance()
+		return true
+	}
+	return false
+}
+
+func (p *parser) expect(typ token.Type, message string) (token.Token, error) {
+	if p.at(typ) {
+		return p.advance(), nil
+	}
+	return token.Token{}, p.error(p.peek(), message)
+}
+
+func (p *parser) advance() token.Token {
+	tok := p.peek()
+	if p.current < len(p.tokens) {
+		p.current++
+	}
+	return tok
+}
+
+func (p *parser) peek() token.Token {
+	if p.current >= len(p.tokens) {
+		return p.tokens[len(p.tokens)-1]
+	}
+	return p.tokens[p.current]
+}
+
+func (p *parser) peekN(n int) token.Token {
+	index := p.current + n
+	if index >= len(p.tokens) {
+		return p.tokens[len(p.tokens)-1]
+	}
+	return p.tokens[index]
+}
+
+func (p *parser) previous() token.Token { return p.tokens[p.current-1] }
+
+func (p *parser) error(tok token.Token, message string) error {
+	return &Error{Filename: p.filename, Token: tok, Message: message}
+}
+
+func base(span token.Span) ast.Base { return ast.Base{SourceSpan: span} }
+
+func spanFrom(start token.Position, end token.Position) ast.Base {
+	return ast.Base{SourceSpan: token.Span{Start: start, End: end}}
+}
+
+func commentNode(tok token.Token) *ast.Comment {
+	return &ast.Comment{Base: base(tok.Span), Text: tok.Lexeme, Documentation: len(tok.Lexeme) > 1 && tok.Lexeme[1] == '#'}
+}

@@ -1,0 +1,251 @@
+package parser
+
+import (
+	"strings"
+
+	"github.com/cafecito-games/gdparser/ast"
+	"github.com/cafecito-games/gdparser/token"
+)
+
+func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
+	left, err := p.parsePrefix()
+	if err != nil {
+		return nil, err
+	}
+	left, err = p.parsePostfix(left)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		typ := p.peek().Type
+		operator := p.peek().Lexeme
+		precedence, rightAssociative := infixPrecedence(typ)
+		if typ == token.Not && p.peekN(1).Type == token.In {
+			operator, precedence = "not in", 3
+		}
+		if precedence < minPrecedence {
+			break
+		}
+		start := left.Span().Start
+		p.advance()
+		if operator == "not in" {
+			p.advance()
+		}
+		nextMin := precedence + 1
+		if rightAssociative {
+			nextMin = precedence
+		}
+		right, err := p.parseExpression(nextMin)
+		if err != nil {
+			return nil, err
+		}
+		left = &ast.BinaryExpression{Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, Right: right}
+	}
+
+	if minPrecedence == 0 && p.match(token.If) {
+		start := left.Span().Start
+		condition, err := p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.Else, "expected else in ternary expression"); err != nil {
+			return nil, err
+		}
+		alternative, err := p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+		left = &ast.TernaryExpression{Base: spanFrom(start, alternative.Span().End), Value: left, Condition: condition, Alternative: alternative}
+	}
+	return left, nil
+}
+
+func (p *parser) parsePrefix() (ast.Expression, error) {
+	tok := p.advance()
+	switch tok.Type {
+	case token.Identifier:
+		return &ast.Identifier{Base: base(tok.Span), Name: tok.Lexeme}, nil
+	case token.Integer:
+		return &ast.Literal{Base: base(tok.Span), Kind: ast.IntegerLiteral, Raw: tok.Lexeme}, nil
+	case token.Float:
+		return &ast.Literal{Base: base(tok.Span), Kind: ast.FloatLiteral, Raw: tok.Lexeme}, nil
+	case token.String:
+		return &ast.Literal{Base: base(tok.Span), Kind: ast.StringLiteral, Raw: tok.Lexeme}, nil
+	case token.True, token.False:
+		return &ast.Literal{Base: base(tok.Span), Kind: ast.BoolLiteral, Raw: tok.Lexeme}, nil
+	case token.Null:
+		return &ast.Literal{Base: base(tok.Span), Kind: ast.NullLiteral, Raw: tok.Lexeme}, nil
+	case token.Minus, token.Plus, token.Not, token.Bang, token.Tilde, token.Await:
+		operandPrecedence := 11
+		if tok.Type == token.Not {
+			operandPrecedence = 3
+		}
+		operand, err := p.parseExpression(operandPrecedence)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.UnaryExpression{Base: spanFrom(tok.Span.Start, operand.Span().End), Operator: tok.Lexeme, Operand: operand}, nil
+	case token.LParen:
+		expr, err := p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.RParen, "expected ')' after expression"); err != nil {
+			return nil, err
+		}
+		return expr, nil
+	case token.LBracket:
+		return p.parseArray(tok)
+	case token.LBrace:
+		return p.parseDictionary(tok)
+	case token.Dollar, token.Percent:
+		return p.parseNodePath(tok)
+	default:
+		return nil, p.error(tok, "expected expression")
+	}
+}
+
+func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
+	for {
+		switch {
+		case p.match(token.LParen):
+			var arguments []ast.Expression
+			if !p.at(token.RParen) {
+				for {
+					arg, err := p.parseExpression(0)
+					if err != nil {
+						return nil, err
+					}
+					arguments = append(arguments, arg)
+					if !p.match(token.Comma) {
+						break
+					}
+					if p.at(token.RParen) {
+						break
+					}
+				}
+			}
+			end, err := p.expect(token.RParen, "expected ')' after arguments")
+			if err != nil {
+				return nil, err
+			}
+			expr = &ast.CallExpression{Base: spanFrom(expr.Span().Start, end.Span.End), Callee: expr, Arguments: arguments}
+		case p.match(token.Dot):
+			property, err := p.expect(token.Identifier, "expected property name after '.'")
+			if err != nil {
+				return nil, err
+			}
+			expr = &ast.MemberExpression{Base: spanFrom(expr.Span().Start, property.Span.End), Object: expr, Property: property.Lexeme}
+		case p.match(token.LBracket):
+			index, err := p.parseExpression(0)
+			if err != nil {
+				return nil, err
+			}
+			end, err := p.expect(token.RBracket, "expected ']' after subscript")
+			if err != nil {
+				return nil, err
+			}
+			expr = &ast.SubscriptExpression{Base: spanFrom(expr.Span().Start, end.Span.End), Object: expr, Index: index}
+		default:
+			return expr, nil
+		}
+	}
+}
+
+func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
+	var elements []ast.Expression
+	if !p.at(token.RBracket) {
+		for {
+			element, err := p.parseExpression(0)
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, element)
+			if !p.match(token.Comma) {
+				break
+			}
+			if p.at(token.RBracket) {
+				break
+			}
+		}
+	}
+	end, err := p.expect(token.RBracket, "expected ']' after array")
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ArrayLiteral{Base: spanFrom(start.Span.Start, end.Span.End), Elements: elements}, nil
+}
+
+func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
+	var entries []ast.DictionaryEntry
+	if !p.at(token.RBrace) {
+		for {
+			key, err := p.parseExpression(0)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(token.Colon, "expected ':' after dictionary key"); err != nil {
+				return nil, err
+			}
+			value, err := p.parseExpression(0)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, ast.DictionaryEntry{Key: key, Value: value})
+			if !p.match(token.Comma) {
+				break
+			}
+			if p.at(token.RBrace) {
+				break
+			}
+		}
+	}
+	end, err := p.expect(token.RBrace, "expected '}' after dictionary")
+	if err != nil {
+		return nil, err
+	}
+	return &ast.DictionaryLiteral{Base: spanFrom(start.Span.Start, end.Span.End), Entries: entries}, nil
+}
+
+func (p *parser) parseNodePath(start token.Token) (ast.Expression, error) {
+	var path strings.Builder
+	if p.at(token.String) {
+		path.WriteString(p.advance().Lexeme)
+	} else {
+		for p.at(token.Identifier, token.Slash) {
+			path.WriteString(p.advance().Lexeme)
+		}
+	}
+	if path.Len() == 0 {
+		return nil, p.error(p.peek(), "expected node path")
+	}
+	return &ast.NodePathExpression{Base: spanFrom(start.Span.Start, p.previous().Span.End), Path: path.String(), Unique: start.Type == token.Percent}, nil
+}
+
+func infixPrecedence(typ token.Type) (int, bool) {
+	switch typ {
+	case token.Or:
+		return 1, false
+	case token.And:
+		return 2, false
+	case token.Equal, token.NotEqual, token.Less, token.LessEqual, token.Greater, token.GreaterEqual, token.In, token.Is, token.As:
+		return 3, false
+	case token.Pipe:
+		return 4, false
+	case token.Caret:
+		return 5, false
+	case token.Ampersand:
+		return 6, false
+	case token.ShiftLeft, token.ShiftRight:
+		return 7, false
+	case token.Plus, token.Minus:
+		return 8, false
+	case token.Star, token.Slash, token.Percent:
+		return 9, false
+	case token.DoubleStar:
+		return 10, true
+	default:
+		return -1, false
+	}
+}
