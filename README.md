@@ -1,35 +1,43 @@
 # gdparser
 
-[![CI](https://github.com/cafecito-games/gdparser/actions/workflows/ci.yml/badge.svg)](https://github.com/cafecito-games/gdparser/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/cafecito-games/gdparser.svg)](https://pkg.go.dev/github.com/cafecito-games/gdparser)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/cafecito-games/gdparser/actions/workflows/ci.yml/badge.svg)](https://github.com/cafecito-games/gdparser/actions/workflows/ci.yml)
 
-`gdparser` is an open-source Godot 4 GDScript parser, transformable AST, and
-source emitter written in Go 1.26. It is primarily a Go library; the included
-CLI makes the parser easy to inspect and script.
+`gdparser` is an open-source Godot 4 GDScript parser, mutable abstract syntax
+tree, and canonical source emitter written in Go 1.26. It is designed primarily
+as a Go library for tools that need to inspect or transform GDScript. The
+repository also includes a CLI for printing an AST or reformatted source.
 
-The project takes its initial AST vocabulary and fixture coverage from
-[`csueiras/gdast`](https://github.com/csueiras/gdast), a Python AST builder for
-GDScript. Unlike that builder, `gdparser` supports both directions: GDScript to
-AST and AST back to canonical GDScript.
+## Status
 
-> [!NOTE]
-> This is the initial development release. The core syntax emitted by `gdast`
-> is supported, but complete parity with every Godot parser extension is an
-> ongoing goal. Unsupported syntax returns a positioned error.
+The parser currently handles the language used by the Uzir client compatibility
+corpus: 2,000 GDScript files totaling roughly 414,000 lines. Every file in that
+corpus passes parsing, canonical formatting, reparsing, and normalized AST
+comparison.
+
+That result is a compatibility milestone, not a claim of complete equivalence
+with Godot's parser. GDScript and Godot continue to evolve, and unsupported
+syntax returns a positioned error rather than being silently accepted.
 
 ## Install
 
-The module requires Go 1.26 or newer.
+Add the library to a Go module:
 
 ```sh
 go get github.com/cafecito-games/gdparser
+```
+
+Install the CLI:
+
+```sh
 go install github.com/cafecito-games/gdparser/cmd/gdparser@latest
 ```
 
-## Library
+The project requires Go 1.26 or newer.
 
-Parse a source file:
+## Library usage
+
+Parse a file, inspect or mutate its typed AST, and emit canonical GDScript:
 
 ```go
 package main
@@ -37,26 +45,25 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/cafecito-games/gdparser"
 	"github.com/cafecito-games/gdparser/ast"
 )
 
 func main() {
-	file, err := gdparser.ParseFile("player.gd", []byte(`
-extends CharacterBody2D
-
-func damage(amount: int) -> bool:
-	health -= amount
-	return health <= 0
-`))
+	source, err := os.ReadFile("player.gd")
+	if err != nil {
+		log.Fatal(err)
+	}
+	file, err := gdparser.ParseFile("player.gd", source)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	ast.Inspect(file, func(node ast.Node) bool {
-		if identifier, ok := node.(*ast.Identifier); ok && identifier.Name == "health" {
-			identifier.Name = "hit_points"
+		if ident, ok := node.(*ast.Identifier); ok && ident.Name == "speed" {
+			ident.Name = "movement_speed"
 		}
 		return true
 	})
@@ -65,88 +72,104 @@ func damage(amount: int) -> bool:
 }
 ```
 
-The public packages have distinct responsibilities:
+The root package exposes the common entry points:
 
-- `gdparser` provides the small top-level parse and format API.
-- `ast` defines typed, mutable nodes plus `Walk`, `Inspect`, `Dump`, and JSON
-  projection helpers.
-- `lexer`, `token`, `parser`, and `format` expose the lower-level pipeline for
-  tools that need it.
+- `Parse(source)` parses an in-memory byte slice.
+- `ParseString(source)` parses an in-memory string.
+- `ParseFile(filename, source)` parses bytes with a diagnostic filename.
+- `Format(file)` emits canonical GDScript from an AST.
 
-Every AST node includes a byte offset and one-based line/column span. Concrete
-pointer nodes are intentionally mutable, making identifier rewrites and other
-source-to-source transformations straightforward.
+Lower-level packages are available when a tool needs more control:
+
+- `lexer` converts source into indentation-aware tokens.
+- `parser` builds the typed AST.
+- `ast` defines nodes, source spans, traversal, tree dumps, and JSON values.
+- `format` emits canonical GDScript.
+- `token` defines token kinds and source positions.
 
 ## CLI
 
-Print a readable tree (the default):
+Print a readable AST tree:
 
 ```sh
 gdparser player.gd
+gdparser -format tree player.gd
 ```
 
-```text
-File "player.gd"
-  Directive extends
-    Identifier CharacterBody2D
-  FunctionDeclaration damage
-    Assignment -=
-      Identifier health
-      Identifier amount
-    ReturnStatement
-      BinaryExpression <=
-        Identifier health
-        Literal 0
-```
-
-Machine-readable JSON includes a `kind` discriminator for every node:
+Print JSON:
 
 ```sh
 gdparser -format json player.gd
 ```
 
-Parse and emit canonical GDScript:
+Emit canonical GDScript:
 
 ```sh
 gdparser -format gdscript player.gd
-cat player.gd | gdparser -format tree -
 ```
 
-## Current syntax coverage
+Pass `-` or omit the path to read from standard input:
 
-- Indentation-sensitive blocks and source spans
-- Comments, documentation comments, annotations, `class_name`, and `extends`
-- `var`, `const`, static variables, typed/inferred declarations, property
-  getters/setters, assignments, signals, and documented enums
-- Functions, lambdas, parameters/defaults, return types, abstract/static
-  functions, and inner classes
-- `if`/`elif`/`else`, `while`, `for`, `match`, `return`, `pass`, `break`, and
-  `continue`
-- Scalar, StringName, NodePath, array, and dictionary literals; calls;
-  member/subscript access; node shortcuts; unary, binary, cast, membership,
-  and ternary expressions
-- Single-, double-, and triple-quoted strings
+```sh
+printf 'var answer = 42\n' | gdparser -format json
+```
 
-Near-term work includes richer match patterns, exact trivia preservation, and
-full conformance testing against Godot's own parser. Syntax choices follow the official
-[GDScript reference](https://docs.godotengine.org/en/stable/tutorials/scripting/gdscript/gdscript_basics.html).
+Diagnostics include the filename, line, and column. The CLI exits non-zero for
+invalid input or an unsupported output format.
+
+## Language coverage
+
+The implementation supports the Godot 4 syntax exercised by the compatibility
+corpus, including:
+
+- classes, annotations, signals, enums, variables, constants, and functions;
+- typed declarations, return types, generics, and accessor blocks;
+- `if`/`elif`/`else`, `for`, `while`, `match`, `break`, `continue`, `pass`,
+  `return`, and `assert`;
+- literals, collections, calls, subscripts, attributes, lambdas, casts,
+  conditional expressions, `await`, and `preload`;
+- operators with GDScript precedence and associativity;
+- multiline expressions, escaped identifiers, `$`/`%` node paths, and
+  statement continuations;
+- line and inline comments represented in the AST.
+
+## AST and formatting model
+
+Every AST node has a source span with byte offsets and one-based line and column
+positions. Nodes are mutable Go structs and can be traversed with `ast.Walk` or
+`ast.Inspect`. `ast.Dump` produces the CLI tree representation, while
+`ast.JSONValue` provides a stable JSON-friendly representation with explicit
+node-kind discriminators.
+
+Formatting is canonical rather than lossless. The emitter preserves program
+structure and comments, but it may normalize indentation, spacing, parentheses,
+blank lines, and literal spelling. If exact source trivia is required, retain
+the original source alongside the AST.
 
 ## Development
 
+Run the standard checks from the repository root:
+
 ```sh
+gofmt -w .
 go test -race ./...
 go vet ./...
-go build ./cmd/gdparser
+go build ./...
 ```
 
-To validate a larger external GDScript tree, enable the opt-in corpus test:
+An external GDScript tree can be used as an opt-in compatibility corpus:
 
 ```sh
-GDPARSER_CORPUS=/path/to/godot/project go test -run TestCorpus -v .
+GDPARSER_CORPUS=/path/to/gdscript/project go test -run TestCorpus -count=1 -v .
 ```
 
-The corpus test parses every `.gd` file, emits canonical GDScript, reparses it,
-and verifies that the normalized AST is structurally unchanged.
+The corpus test discovers `.gd` files recursively and verifies parse,
+format/reparse, and normalized AST structural equality. The external corpus is
+read-only and is not included in this repository.
 
-Contributions should include parser and formatter round-trip coverage for new
-syntax. This project is available under the [MIT License](LICENSE).
+See [AGENTS.md](AGENTS.md) for the repository architecture, invariants, and
+contribution workflow.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
