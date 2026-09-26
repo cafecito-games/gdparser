@@ -10,11 +10,12 @@ import (
 
 	"github.com/cafecito-games/gdparser"
 	"github.com/cafecito-games/gdparser/ast"
-	"github.com/cafecito-games/gdparser/projectconfig"
-	projectast "github.com/cafecito-games/gdparser/projectconfig/ast"
+	"github.com/cafecito-games/gdparser/configfile"
+	configast "github.com/cafecito-games/gdparser/configfile/ast"
 	"github.com/cafecito-games/gdparser/shader"
 	shaderast "github.com/cafecito-games/gdparser/shader/ast"
 	"github.com/cafecito-games/gdparser/textresource"
+	"github.com/cafecito-games/gdparser/uidfile"
 )
 
 // TestCorpus is an opt-in integration test for external Godot projects. Set
@@ -29,13 +30,16 @@ func TestCorpus(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
+		if entry.IsDir() && path != root && (entry.Name() == ".git" || entry.Name() == ".godot") {
+			return filepath.SkipDir
+		}
 		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil
 		}
 		extension := strings.ToLower(filepath.Ext(path))
-		isProjectConfig := filepath.Base(path) == "project.godot"
+		isConfigFile := filepath.Base(path) == "project.godot" || extension == ".cfg" || extension == ".gdextension" || extension == ".import" || extension == ".remap"
 		if extension != ".gd" && extension != ".tscn" && extension != ".tres" && extension != ".escn" &&
-			extension != ".gdshader" && extension != ".gdshaderinc" && !isProjectConfig {
+			extension != ".gdshader" && extension != ".gdshaderinc" && extension != ".uid" && !isConfigFile {
 			return nil
 		}
 		source, readErr := os.ReadFile(path)
@@ -73,20 +77,20 @@ func TestCorpus(t *testing.T) {
 			}
 			firstValue = normalizeValue(textresource.JSONValue(first), true)
 			secondValue = normalizeValue(textresource.JSONValue(second), true)
-		case isProjectConfig:
-			kind = "project config"
-			first, parseErr := projectconfig.ParseFile(path, source)
+		case isConfigFile:
+			kind = "ConfigFile"
+			first, parseErr := configfile.ParseFile(path, source)
 			if parseErr != nil {
 				t.Errorf("parse %s: %v", path, parseErr)
 				return nil
 			}
-			second, parseErr := projectconfig.ParseFile(path, []byte(projectconfig.Format(first)))
+			second, parseErr := configfile.ParseFile(path, []byte(configfile.Format(first)))
 			if parseErr != nil {
 				t.Errorf("reparse %s: %v", path, parseErr)
 				return nil
 			}
-			firstValue = normalizeValue(projectast.JSONValue(first), true)
-			secondValue = normalizeValue(projectast.JSONValue(second), true)
+			firstValue = normalizeValue(configast.JSONValue(first), true)
+			secondValue = normalizeValue(configast.JSONValue(second), true)
 		case extension == ".gdshader", extension == ".gdshaderinc":
 			kind = "shader"
 			first, parseErr := shader.ParseFile(path, source)
@@ -101,6 +105,20 @@ func TestCorpus(t *testing.T) {
 			}
 			firstValue = normalizeValue(shaderast.JSONValue(first), true)
 			secondValue = normalizeValue(shaderast.JSONValue(second), true)
+		case extension == ".uid":
+			kind = "UID sidecar"
+			first, parseErr := uidfile.ParseFile(path, source)
+			if parseErr != nil {
+				t.Errorf("parse %s: %v", path, parseErr)
+				return nil
+			}
+			second, parseErr := uidfile.ParseFile(path, []byte(uidfile.Format(first)))
+			if parseErr != nil {
+				t.Errorf("reparse %s: %v", path, parseErr)
+				return nil
+			}
+			firstValue = normalizeValue(uidfile.JSONValue(first), true)
+			secondValue = normalizeValue(uidfile.JSONValue(second), true)
 		default:
 			return nil
 		}

@@ -1,4 +1,4 @@
-// Package parser parses Godot ConfigFile/project.godot tokens into a typed AST.
+// Package parser parses Godot ConfigFile tokens into a typed AST.
 package parser
 
 import (
@@ -8,9 +8,9 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/cafecito-games/gdparser/projectconfig/ast"
-	"github.com/cafecito-games/gdparser/projectconfig/lexer"
-	"github.com/cafecito-games/gdparser/projectconfig/token"
+	"github.com/cafecito-games/gdparser/configfile/ast"
+	"github.com/cafecito-games/gdparser/configfile/lexer"
+	"github.com/cafecito-games/gdparser/configfile/token"
 )
 
 // Error is a syntax error with a source position.
@@ -28,7 +28,7 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s (found %s)", location, e.Message, e.Token)
 }
 
-// Parse parses one Godot project configuration file.
+// Parse parses one Godot ConfigFile document.
 func Parse(filename string, source []byte) (*ast.File, error) {
 	tokens, err := lexer.Lex(source)
 	if err != nil {

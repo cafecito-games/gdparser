@@ -1,5 +1,4 @@
-// Package format emits canonical Godot project configuration source from an
-// AST.
+// Package format emits canonical Godot ConfigFile source from an AST.
 package format
 
 import (
@@ -8,10 +7,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/cafecito-games/gdparser/projectconfig/ast"
+	"github.com/cafecito-games/gdparser/configfile/ast"
 )
 
-// File formats a parsed or programmatically constructed project configuration.
+// File formats a parsed or programmatically constructed ConfigFile document.
 func File(file *ast.File) string {
 	if file == nil {
 		return ""

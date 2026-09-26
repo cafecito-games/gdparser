@@ -1,5 +1,5 @@
-// Package token defines lexical tokens and source locations for Godot project
-// configuration files.
+// Package token defines lexical tokens and source locations for Godot
+// ConfigFile documents.
 package token
 
 import "fmt"
