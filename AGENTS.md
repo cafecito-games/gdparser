@@ -4,25 +4,27 @@
 
 These instructions apply to the entire repository.
 
-`gdparser` is a Go 1.26 library and CLI for parsing Godot 4 GDScript into a
-typed, mutable AST and emitting canonical GDScript from that AST. Treat the
-library API as the primary product; the CLI is a thin user-facing adapter.
+`gdparser` is a Go 1.26 library and CLI for parsing Godot 4 source and text
+formats into typed, mutable syntax trees and emitting canonical source. It
+supports GDScript, text scenes/resources (`.tscn`, `.tres`, and `.escn`),
+`project.godot`, and the Godot shading language (`.gdshader` and
+`.gdshaderinc`). Treat the library API as the primary product; the CLI is a
+thin user-facing adapter.
 
 ## Repository map
 
-- `gdparser.go`: public convenience API.
-- `token/`: token kinds, values, and source positions.
-- `lexer/`: indentation-aware lexical analysis.
-- `ast/`: typed nodes, spans, traversal, tree dumps, and JSON conversion.
-- `parser/`: recursive-descent and Pratt parsing.
-- `format/`: canonical GDScript emission.
+- `gdparser.go`: backward-compatible GDScript convenience API.
+- `token/`, `lexer/`, `ast/`, `parser/`, `format/`: the GDScript pipeline.
+- `textresource/`: text scene/resource parsing and canonical emission.
+- `projectconfig/`: `project.godot` parsing and canonical emission.
+- `shader/`: Godot shading-language parsing and canonical emission.
 - `cmd/gdparser/`: command-line interface.
 - `corpus_test.go`: opt-in external corpus validation.
 
 The primary data flow is:
 
 ```text
-GDScript source -> lexer tokens -> typed AST -> tree, JSON, or GDScript
+Godot source -> format-specific lexer/parser -> typed tree -> tree, JSON, or canonical source
 ```
 
 ## Core invariants
@@ -41,6 +43,11 @@ GDScript source -> lexer tokens -> typed AST -> tree, JSON, or GDScript
   AST's precedence or associativity requires them.
 - GDScript indentation is syntax. Keep indent/dedent handling, multiline
   expressions, comments, and suite boundaries correct.
+- Text resources and project settings are ordered document formats. Do not use
+  maps where doing so would discard source order or conceal duplicate entries.
+- Keep the grammars separate. Similar-looking constructs may share carefully
+  factored implementation utilities, but GDScript, Variant text values,
+  ConfigFile documents, and shader code are not interchangeable languages.
 - Comments must remain in their semantic scope after formatting, even though
   exact whitespace and blank-line preservation is not required.
 - Prefer the standard library. Add a dependency only when its maintenance and
@@ -74,10 +81,10 @@ go build ./...
 git diff --check
 ```
 
-When a representative GDScript project is available, also run:
+When a representative Godot project is available, also run:
 
 ```sh
-GDPARSER_CORPUS=/path/to/gdscript/project go test -run TestCorpus -count=1 -v .
+GDPARSER_CORPUS=/path/to/godot/project go test -run TestCorpus -count=1 -v .
 ```
 
 The corpus is an additional compatibility gate, not a substitute for focused
@@ -90,6 +97,12 @@ unit tests. Treat it as read-only and do not modify it to make a test pass.
 - Expression changes should cover precedence, associativity, grouping, and
   their formatted output.
 - Statement changes should cover nested suites and adjacent comments.
+- Text-resource changes should cover scene and resource headers, ordered
+  sections and properties, resource references, and recursive Variant values.
+- Project configuration changes should cover preamble properties, sections,
+  slash-delimited keys, comments, and recursive Variant values.
+- Shader changes should cover declarations, blocks, control flow, preprocessing,
+  precedence, associativity, grouping, and formatted output.
 - AST changes should cover traversal and JSON output as well as parsing.
 - Formatter changes should be idempotent where practical and must always
   produce parseable output for supported ASTs.
