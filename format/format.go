@@ -47,7 +47,7 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 		if node.Arguments != nil {
 			args := make([]string, len(node.Arguments))
 			for i, argument := range node.Arguments {
-				args[i] = expression(argument, 0)
+				args[i] = expressionAt(argument, 0, depth)
 			}
 			text += "(" + strings.Join(args, ", ") + ")"
 		}
@@ -57,15 +57,21 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 	case *ast.Directive:
 		text := node.Name
 		if node.Value != nil {
-			text += " " + expression(node.Value, 0)
+			text += " " + expressionAt(node.Value, 0, depth)
+		}
+		if node.Extends != nil {
+			text += " extends " + expressionAt(node.Extends, 0, depth)
 		}
 		p.line(depth, text)
 	case *ast.ExpressionStatement:
-		p.line(depth, expression(node.Expression, 0))
+		p.line(depth, expressionAt(node.Expression, 0, depth))
 	case *ast.VariableDeclaration:
 		keyword := "var"
 		if node.Constant {
 			keyword = "const"
+		}
+		if node.Static {
+			keyword = "static " + keyword
 		}
 		text := keyword + " " + node.Name
 		if node.Type != "" {
@@ -76,15 +82,27 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 			if node.Inferred {
 				operator = " := "
 			}
-			text += operator + expression(node.Value, 0)
+			text += operator + expressionAt(node.Value, 0, depth)
 		}
-		p.line(depth, text)
+		if node.Getter == nil && node.Setter == nil {
+			p.line(depth, text)
+			break
+		}
+		p.line(depth, text+":")
+		if node.Getter != nil {
+			p.line(depth+1, "get:")
+			p.block(node.Getter, depth+2)
+		}
+		if node.Setter != nil {
+			p.line(depth+1, "set("+node.Setter.Parameter+"):")
+			p.block(node.Setter.Body, depth+2)
+		}
 	case *ast.Assignment:
-		p.line(depth, expression(node.Target, 0)+" "+node.Operator+" "+expression(node.Value, 0))
+		p.line(depth, expressionAt(node.Target, 0, depth)+" "+node.Operator+" "+expressionAt(node.Value, 0, depth))
 	case *ast.ReturnStatement:
 		text := "return"
 		if node.Value != nil {
-			text += " " + expression(node.Value, 0)
+			text += " " + expressionAt(node.Value, 0, depth)
 		}
 		p.line(depth, text)
 	case *ast.KeywordStatement:
@@ -96,14 +114,18 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 		}
 		params := make([]string, len(node.Parameters))
 		for i, parameter := range node.Parameters {
-			params[i] = formatParameter(parameter)
+			params[i] = formatParameterAt(parameter, depth)
 		}
 		text := prefix + node.Name + "(" + strings.Join(params, ", ") + ")"
 		if node.ReturnType != "" {
 			text += " -> " + node.ReturnType
 		}
-		p.line(depth, text+":")
-		p.block(node.Body, depth+1)
+		if node.Abstract {
+			p.line(depth, text)
+		} else {
+			p.line(depth, text+":")
+			p.block(node.Body, depth+1)
+		}
 	case *ast.ClassDeclaration:
 		text := "class " + node.Name
 		if node.Extends != "" {
@@ -114,7 +136,7 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 	case *ast.SignalDeclaration:
 		params := make([]string, len(node.Parameters))
 		for i, parameter := range node.Parameters {
-			params[i] = formatParameter(parameter)
+			params[i] = formatParameterAt(parameter, depth)
 		}
 		text := "signal " + node.Name
 		if node.Parameters != nil {
@@ -122,25 +144,40 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 		}
 		p.line(depth, text)
 	case *ast.EnumDeclaration:
-		members := make([]string, len(node.Members))
-		for i, member := range node.Members {
-			members[i] = member.Name
-			if member.Value != nil {
-				members[i] += " = " + expression(member.Value, 0)
-			}
-		}
 		text := "enum"
 		if node.Name != "" {
 			text += " " + node.Name
 		}
-		p.line(depth, text+" { "+strings.Join(members, ", ")+" }")
+		if enumHasComments(node) {
+			p.line(depth, text+" {")
+			for _, member := range node.Members {
+				for _, comment := range member.Comments {
+					p.line(depth+1, comment.Text)
+				}
+				memberText := member.Name
+				if member.Value != nil {
+					memberText += " = " + expressionAt(member.Value, 0, depth+1)
+				}
+				p.line(depth+1, memberText+",")
+			}
+			p.line(depth, "}")
+		} else {
+			members := make([]string, len(node.Members))
+			for i, member := range node.Members {
+				members[i] = member.Name
+				if member.Value != nil {
+					members[i] += " = " + expressionAt(member.Value, 0, depth)
+				}
+			}
+			p.line(depth, text+" { "+strings.Join(members, ", ")+" }")
+		}
 	case *ast.IfStatement:
 		for i, branch := range node.Branches {
 			keyword := "if"
 			if i > 0 {
 				keyword = "elif"
 			}
-			p.line(depth, keyword+" "+expression(branch.Condition, 0)+":")
+			p.line(depth, keyword+" "+expressionAt(branch.Condition, 0, depth)+":")
 			p.block(branch.Body, depth+1)
 		}
 		if node.Else != nil {
@@ -148,21 +185,25 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 			p.block(node.Else, depth+1)
 		}
 	case *ast.WhileStatement:
-		p.line(depth, "while "+expression(node.Condition, 0)+":")
+		p.line(depth, "while "+expressionAt(node.Condition, 0, depth)+":")
 		p.block(node.Body, depth+1)
 	case *ast.ForStatement:
-		p.line(depth, "for "+node.Variable+" in "+expression(node.Iterable, 0)+":")
+		variable := node.Variable
+		if node.Type != "" {
+			variable += ": " + node.Type
+		}
+		p.line(depth, "for "+variable+" in "+expressionAt(node.Iterable, 0, depth)+":")
 		p.block(node.Body, depth+1)
 	case *ast.MatchStatement:
-		p.line(depth, "match "+expression(node.Value, 0)+":")
+		p.line(depth, "match "+expressionAt(node.Value, 0, depth)+":")
 		for _, matchCase := range node.Cases {
 			patterns := make([]string, len(matchCase.Patterns))
 			for i, pattern := range matchCase.Patterns {
-				patterns[i] = expression(pattern, 0)
+				patterns[i] = expressionAt(pattern, 0, depth+1)
 			}
 			text := strings.Join(patterns, ", ")
 			if matchCase.Guard != nil {
-				text += " when " + expression(matchCase.Guard, 0)
+				text += " when " + expressionAt(matchCase.Guard, 0, depth+1)
 			}
 			p.line(depth+1, text+":")
 			p.block(matchCase.Body, depth+2)
@@ -170,23 +211,38 @@ func (p *printer) statement(statement ast.Statement, depth int) {
 	}
 }
 
-func formatParameter(parameter ast.Parameter) string {
+func formatParameterAt(parameter ast.Parameter, depth int) string {
 	text := parameter.Name
 	if parameter.Type != "" {
 		text += ": " + parameter.Type
 	}
 	if parameter.Default != nil {
-		text += " = " + expression(parameter.Default, 0)
+		text += " = " + expressionAt(parameter.Default, 0, depth)
 	}
 	return text
 }
 
+func enumHasComments(node *ast.EnumDeclaration) bool {
+	for _, member := range node.Members {
+		if len(member.Comments) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func expression(expr ast.Expression, parentPrecedence int) string {
+	return expressionAt(expr, parentPrecedence, 0)
+}
+
+func expressionAt(expr ast.Expression, parentPrecedence, depth int) string {
 	if expr == nil {
 		return ""
 	}
 	switch node := expr.(type) {
 	case *ast.Identifier:
+		return node.Name
+	case *ast.TypeExpression:
 		return node.Name
 	case *ast.Literal:
 		return node.Raw
@@ -205,7 +261,7 @@ func expression(expr ast.Expression, parentPrecedence int) string {
 		if node.Operator == "not" {
 			operandPrecedence = 3
 		}
-		text := operator + expression(node.Operand, operandPrecedence)
+		text := operator + expressionAt(node.Operand, operandPrecedence, depth)
 		if node.Operator == "not" && parentPrecedence >= 3 {
 			return "(" + text + ")"
 		}
@@ -219,13 +275,13 @@ func expression(expr ast.Expression, parentPrecedence int) string {
 		if node.Operator == "**" {
 			leftPrecedence, rightPrecedence = precedence+1, precedence
 		}
-		text := expression(node.Left, leftPrecedence) + " " + node.Operator + " " + expression(node.Right, rightPrecedence)
+		text := expressionAt(node.Left, leftPrecedence, depth) + " " + node.Operator + " " + expressionAt(node.Right, rightPrecedence, depth)
 		if precedence < parentPrecedence {
 			return "(" + text + ")"
 		}
 		return text
 	case *ast.TernaryExpression:
-		text := expression(node.Value, 1) + " if " + expression(node.Condition, 1) + " else " + expression(node.Alternative, 1)
+		text := expressionAt(node.Value, 1, depth) + " if " + expressionAt(node.Condition, 1, depth) + " else " + expressionAt(node.Alternative, 1, depth)
 		if parentPrecedence > 0 {
 			return "(" + text + ")"
 		}
@@ -233,27 +289,85 @@ func expression(expr ast.Expression, parentPrecedence int) string {
 	case *ast.CallExpression:
 		arguments := make([]string, len(node.Arguments))
 		for i, argument := range node.Arguments {
-			arguments[i] = expression(argument, 0)
+			arguments[i] = expressionAt(argument, 0, depth)
 		}
-		return expression(node.Callee, 12) + "(" + strings.Join(arguments, ", ") + ")"
+		return expressionAt(node.Callee, 12, depth) + "(" + strings.Join(arguments, ", ") + ")"
 	case *ast.MemberExpression:
-		return expression(node.Object, 12) + "." + node.Property
+		return expressionAt(node.Object, 12, depth) + "." + node.Property
 	case *ast.SubscriptExpression:
-		return expression(node.Object, 12) + "[" + expression(node.Index, 0) + "]"
+		return expressionAt(node.Object, 12, depth) + "[" + expressionAt(node.Index, 0, depth) + "]"
 	case *ast.ArrayLiteral:
 		elements := make([]string, len(node.Elements))
 		for i, element := range node.Elements {
-			elements[i] = expression(element, 0)
+			elements[i] = expressionAt(element, 0, depth)
 		}
 		return "[" + strings.Join(elements, ", ") + "]"
 	case *ast.DictionaryLiteral:
 		entries := make([]string, len(node.Entries))
 		for i, entry := range node.Entries {
-			entries[i] = expression(entry.Key, 0) + ": " + expression(entry.Value, 0)
+			entries[i] = expressionAt(entry.Key, 0, depth) + ": " + expressionAt(entry.Value, 0, depth)
 		}
 		return "{" + strings.Join(entries, ", ") + "}"
+	case *ast.LambdaExpression:
+		parameters := make([]string, len(node.Parameters))
+		for i, parameter := range node.Parameters {
+			parameters[i] = formatParameterAt(parameter, depth)
+		}
+		text := "func(" + strings.Join(parameters, ", ") + ")"
+		if node.ReturnType != "" {
+			text += " -> " + node.ReturnType
+		}
+		if !node.Inline {
+			var bodyPrinter printer
+			bodyPrinter.block(node.Body, depth+1)
+			result := text + ":\n" + bodyPrinter.builder.String() + strings.Repeat("\t", depth)
+			if parentPrecedence > 0 {
+				return "(" + result + ")"
+			}
+			return result
+		}
+		body := make([]string, len(node.Body))
+		for i, statement := range node.Body {
+			body[i] = inlineStatement(statement)
+		}
+		result := text + ": " + strings.Join(body, "; ")
+		if parentPrecedence > 0 {
+			return "(" + result + ")"
+		}
+		return result
 	default:
 		panic(fmt.Sprintf("format: unsupported expression %T", expr))
+	}
+}
+
+func inlineStatement(statement ast.Statement) string {
+	switch node := statement.(type) {
+	case *ast.ExpressionStatement:
+		return expression(node.Expression, 0)
+	case *ast.Assignment:
+		return expression(node.Target, 0) + " " + node.Operator + " " + expression(node.Value, 0)
+	case *ast.ReturnStatement:
+		if node.Value == nil {
+			return "return"
+		}
+		return "return " + expression(node.Value, 0)
+	case *ast.KeywordStatement:
+		return node.Keyword
+	case *ast.VariableDeclaration:
+		keyword := "var"
+		if node.Constant {
+			keyword = "const"
+		}
+		text := keyword + " " + node.Name
+		if node.Type != "" {
+			text += ": " + node.Type
+		}
+		if node.Value != nil {
+			text += " = " + expression(node.Value, 0)
+		}
+		return text
+	default:
+		panic(fmt.Sprintf("format: unsupported inline statement %T", statement))
 	}
 }
 
@@ -263,7 +377,7 @@ func operatorPrecedence(operator string) int {
 		return 1
 	case "and":
 		return 2
-	case "==", "!=", "<", "<=", ">", ">=", "in", "not in", "is", "as":
+	case "==", "!=", "<", "<=", ">", ">=", "in", "not in", "is", "is not", "as":
 		return 3
 	case "|":
 		return 4

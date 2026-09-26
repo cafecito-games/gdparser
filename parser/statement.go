@@ -9,11 +9,10 @@ import (
 
 func (p *parser) parseAnnotation() (ast.Statement, error) {
 	start := p.advance()
-	name := p.peek()
-	if name.Type != token.Identifier && name.Type != token.Tool {
-		return nil, p.error(name, "expected annotation name")
+	name, err := p.expectName("expected annotation name")
+	if err != nil {
+		return nil, err
 	}
-	p.advance()
 	var arguments []ast.Expression
 	end := name.Span.End
 	if p.match(token.LParen) {
@@ -48,24 +47,38 @@ func (p *parser) parseDirective() (ast.Statement, error) {
 			return nil, err
 		}
 	}
+	var extends ast.Expression
+	if start.Type == token.ClassName && p.match(token.Extends) {
+		extends, err = p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+	}
 	end := start.Span.End
 	if value != nil {
 		end = value.Span().End
 	}
-	return &ast.Directive{Base: spanFrom(start.Span.Start, end), Name: start.Lexeme, Value: value}, nil
+	if extends != nil {
+		end = extends.Span().End
+	}
+	return &ast.Directive{Base: spanFrom(start.Span.Start, end), Name: start.Lexeme, Value: value, Extends: extends}, nil
 }
 
-func (p *parser) parseVariable() (ast.Statement, error) {
+func (p *parser) parseVariable(static bool) (ast.Statement, error) {
 	start := p.advance()
-	name, err := p.expect(token.Identifier, "expected variable name")
+	return p.parseVariableAfter(start, start.Type == token.Const, static)
+}
+
+func (p *parser) parseVariableAfter(start token.Token, constant, static bool) (ast.Statement, error) {
+	name, err := p.expectName("expected variable name")
 	if err != nil {
 		return nil, err
 	}
 	declaration := &ast.VariableDeclaration{
-		Base: spanFrom(start.Span.Start, name.Span.End), Name: name.Lexeme, Constant: start.Type == token.Const,
+		Base: spanFrom(start.Span.Start, name.Span.End), Name: name.Lexeme, Constant: constant, Static: static,
 	}
 	if p.match(token.Colon) {
-		declaration.Type = p.parseTypeUntil(token.Assign, token.InferAssign, token.Newline, token.Comment)
+		declaration.Type = p.parseTypeUntil(token.Assign, token.InferAssign, token.Colon, token.Newline, token.Comment)
 		if declaration.Type == "" {
 			return nil, p.error(p.peek(), "expected type after ':'")
 		}
@@ -79,6 +92,11 @@ func (p *parser) parseVariable() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.at(token.Colon) {
+		if err := p.parsePropertyAccessors(declaration); err != nil {
+			return nil, err
+		}
+	}
 	if declaration.Value != nil {
 		declaration.SourceSpan.End = declaration.Value.Span().End
 	} else if p.current > 0 {
@@ -87,8 +105,75 @@ func (p *parser) parseVariable() (ast.Statement, error) {
 	return declaration, nil
 }
 
+func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) error {
+	if _, err := p.expect(token.Colon, "expected ':' before property accessors"); err != nil {
+		return err
+	}
+	if _, err := p.expect(token.Newline, "expected newline before property accessors"); err != nil {
+		return err
+	}
+	indent, err := p.expect(token.Indent, "expected indented property accessors")
+	if err != nil {
+		return err
+	}
+	_ = indent
+	for !p.at(token.Dedent, token.EOF) {
+		for p.match(token.Newline) {
+		}
+		if p.at(token.Dedent) {
+			break
+		}
+		if p.at(token.Comment) {
+			p.advance()
+			if _, err := p.expect(token.Newline, "expected end of comment"); err != nil {
+				return err
+			}
+			continue
+		}
+		accessor, err := p.expectName("expected get or set accessor")
+		if err != nil {
+			return err
+		}
+		switch accessor.Lexeme {
+		case "get":
+			if p.match(token.LParen) {
+				if _, err = p.expect(token.RParen, "expected ')' after get"); err != nil {
+					return err
+				}
+			}
+			declaration.Getter, _, err = p.parseSuite()
+		case "set":
+			parameter := "value"
+			if p.match(token.LParen) {
+				name, nameErr := p.expectName("expected setter parameter")
+				if nameErr != nil {
+					return nameErr
+				}
+				parameter = name.Lexeme
+				if _, nameErr = p.expect(token.RParen, "expected ')' after setter parameter"); nameErr != nil {
+					return nameErr
+				}
+			}
+			var body []ast.Statement
+			body, _, err = p.parseSuite()
+			declaration.Setter = &ast.PropertySetter{Parameter: parameter, Body: body}
+		default:
+			return p.error(accessor, "expected get or set accessor")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	end, err := p.expect(token.Dedent, "expected end of property accessors")
+	if err != nil {
+		return err
+	}
+	declaration.SourceSpan.End = end.Span.End
+	return nil
+}
+
 func (p *parser) parseFunction(start token.Token, static bool) (ast.Statement, error) {
-	name, err := p.expect(token.Identifier, "expected function name")
+	name, err := p.expectName("expected function name")
 	if err != nil {
 		return nil, err
 	}
@@ -98,10 +183,16 @@ func (p *parser) parseFunction(start token.Token, static bool) (ast.Statement, e
 	}
 	returnType := ""
 	if p.match(token.Arrow) {
-		returnType = p.parseTypeUntil(token.Colon)
+		returnType = p.parseTypeUntil(token.Colon, token.Newline, token.Comment)
 		if returnType == "" {
 			return nil, p.error(p.peek(), "expected return type after '->'")
 		}
+	}
+	if !p.at(token.Colon) {
+		return &ast.FunctionDeclaration{
+			Base: spanFrom(start.Span.Start, p.previous().Span.End), Name: name.Lexeme, Parameters: parameters,
+			ReturnType: returnType, Static: static, Abstract: true,
+		}, nil
 	}
 	body, end, err := p.parseSuite()
 	if err != nil {
@@ -120,7 +211,7 @@ func (p *parser) parseParameters() ([]ast.Parameter, error) {
 	var parameters []ast.Parameter
 	if !p.at(token.RParen) {
 		for {
-			name, err := p.expect(token.Identifier, "expected parameter name")
+			name, err := p.expectName("expected parameter name")
 			if err != nil {
 				return nil, err
 			}
@@ -154,7 +245,7 @@ func (p *parser) parseParameters() ([]ast.Parameter, error) {
 
 func (p *parser) parseClass() (ast.Statement, error) {
 	start := p.advance()
-	name, err := p.expect(token.Identifier, "expected class name")
+	name, err := p.expectName("expected class name")
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +265,7 @@ func (p *parser) parseClass() (ast.Statement, error) {
 
 func (p *parser) parseSignal() (ast.Statement, error) {
 	start := p.advance()
-	name, err := p.expect(token.Identifier, "expected signal name")
+	name, err := p.expectName("expected signal name")
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +289,21 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 		return nil, err
 	}
 	var members []ast.EnumMember
+	var pendingComments []*ast.Comment
 	for !p.at(token.RBrace) {
-		memberName, err := p.expect(token.Identifier, "expected enum member")
+		if p.match(token.Comma) {
+			continue
+		}
+		if p.at(token.Comment) {
+			pendingComments = append(pendingComments, commentNode(p.advance()))
+			continue
+		}
+		memberName, err := p.expectName("expected enum member")
 		if err != nil {
 			return nil, err
 		}
-		member := ast.EnumMember{Name: memberName.Lexeme}
+		member := ast.EnumMember{Name: memberName.Lexeme, Comments: pendingComments}
+		pendingComments = nil
 		if p.match(token.Assign) {
 			member.Value, err = p.parseExpression(0)
 			if err != nil {
@@ -211,6 +311,9 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 			}
 		}
 		members = append(members, member)
+		for p.at(token.Comment) {
+			pendingComments = append(pendingComments, commentNode(p.advance()))
+		}
 		if !p.match(token.Comma) {
 			break
 		}
@@ -236,6 +339,7 @@ func (p *parser) parseIf() (ast.Statement, error) {
 		return nil, err
 	}
 	statement := &ast.IfStatement{Base: spanFrom(start.Span.Start, end), Branches: []ast.Branch{{Condition: condition, Body: body}}}
+	p.match(token.Newline)
 	for p.match(token.Elif) {
 		condition, err = p.parseExpression(0)
 		if err != nil {
@@ -247,6 +351,7 @@ func (p *parser) parseIf() (ast.Statement, error) {
 		}
 		statement.Branches = append(statement.Branches, ast.Branch{Condition: condition, Body: body})
 		statement.SourceSpan.End = end
+		p.match(token.Newline)
 	}
 	if p.match(token.Else) {
 		statement.Else, end, err = p.parseSuite()
@@ -273,9 +378,16 @@ func (p *parser) parseWhile() (ast.Statement, error) {
 
 func (p *parser) parseFor() (ast.Statement, error) {
 	start := p.advance()
-	variable, err := p.expect(token.Identifier, "expected loop variable")
+	variable, err := p.expectName("expected loop variable")
 	if err != nil {
 		return nil, err
+	}
+	typeName := ""
+	if p.match(token.Colon) {
+		typeName = p.parseTypeUntil(token.In)
+		if typeName == "" {
+			return nil, p.error(p.peek(), "expected loop variable type")
+		}
 	}
 	if _, err := p.expect(token.In, "expected 'in' after loop variable"); err != nil {
 		return nil, err
@@ -288,7 +400,7 @@ func (p *parser) parseFor() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ast.ForStatement{Base: spanFrom(start.Span.Start, end), Variable: variable.Lexeme, Iterable: iterable, Body: body}, nil
+	return &ast.ForStatement{Base: spanFrom(start.Span.Start, end), Variable: variable.Lexeme, Type: typeName, Iterable: iterable, Body: body}, nil
 }
 
 func (p *parser) parseMatch() (ast.Statement, error) {
@@ -323,6 +435,11 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 		}
 		if p.at(token.Dedent) {
 			break
+		}
+		if p.at(token.Comment) {
+			p.advance()
+			p.match(token.Newline)
+			continue
 		}
 		matchCase := ast.MatchCase{}
 		for {

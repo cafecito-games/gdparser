@@ -24,13 +24,24 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 		if typ == token.Not && p.peekN(1).Type == token.In {
 			operator, precedence = "not in", 3
 		}
+		if typ == token.Is && p.peekN(1).Type == token.Not {
+			operator, precedence = "is not", 3
+		}
 		if precedence < minPrecedence {
 			break
 		}
 		start := left.Span().Start
 		p.advance()
-		if operator == "not in" {
+		if operator == "not in" || operator == "is not" {
 			p.advance()
+		}
+		if typ == token.As || typ == token.Is {
+			right, typeErr := p.parseTypeExpression()
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			left = &ast.BinaryExpression{Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, Right: right}
+			continue
 		}
 		nextMin := precedence + 1
 		if rightAssociative {
@@ -72,6 +83,18 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.FloatLiteral, Raw: tok.Lexeme}, nil
 	case token.String:
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.StringLiteral, Raw: tok.Lexeme}, nil
+	case token.Ampersand:
+		if !p.at(token.String) {
+			return nil, p.error(tok, "expected string after '&'")
+		}
+		value := p.advance()
+		return &ast.Literal{Base: spanFrom(tok.Span.Start, value.Span.End), Kind: ast.StringNameLiteral, Raw: "&" + value.Lexeme}, nil
+	case token.Caret:
+		if !p.at(token.String) {
+			return nil, p.error(tok, "expected string after '^'")
+		}
+		value := p.advance()
+		return &ast.Literal{Base: spanFrom(tok.Span.Start, value.Span.End), Kind: ast.NodePathLiteral, Raw: "^" + value.Lexeme}, nil
 	case token.True, token.False:
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.BoolLiteral, Raw: tok.Lexeme}, nil
 	case token.Null:
@@ -101,7 +124,12 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 		return p.parseDictionary(tok)
 	case token.Dollar, token.Percent:
 		return p.parseNodePath(tok)
+	case token.Func:
+		return p.parseLambda(tok)
 	default:
+		if isNameToken(tok) {
+			return &ast.Identifier{Base: base(tok.Span), Name: tok.Lexeme}, nil
+		}
 		return nil, p.error(tok, "expected expression")
 	}
 }
@@ -111,6 +139,8 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 		switch {
 		case p.match(token.LParen):
 			var arguments []ast.Expression
+			for p.match(token.Comment) {
+			}
 			if !p.at(token.RParen) {
 				for {
 					arg, err := p.parseExpression(0)
@@ -118,8 +148,12 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 						return nil, err
 					}
 					arguments = append(arguments, arg)
+					for p.match(token.Comment) {
+					}
 					if !p.match(token.Comma) {
 						break
+					}
+					for p.match(token.Comment) {
 					}
 					if p.at(token.RParen) {
 						break
@@ -132,7 +166,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 			}
 			expr = &ast.CallExpression{Base: spanFrom(expr.Span().Start, end.Span.End), Callee: expr, Arguments: arguments}
 		case p.match(token.Dot):
-			property, err := p.expect(token.Identifier, "expected property name after '.'")
+			property, err := p.expectName("expected property name after '.'")
 			if err != nil {
 				return nil, err
 			}
@@ -153,8 +187,68 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 	}
 }
 
+func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
+	parameters, err := p.parseParameters()
+	if err != nil {
+		return nil, err
+	}
+	returnType := ""
+	if p.match(token.Arrow) {
+		returnType = p.parseTypeUntil(token.Colon)
+		if returnType == "" {
+			return nil, p.error(p.peek(), "expected lambda return type")
+		}
+	}
+	inline := p.peekN(1).Type != token.Newline && p.peekN(1).Type != token.Comment
+	body, end, err := p.parseSuite()
+	if err != nil {
+		return nil, err
+	}
+	return &ast.LambdaExpression{
+		Base: spanFrom(start.Span.Start, end), Parameters: parameters, ReturnType: returnType, Body: body, Inline: inline,
+	}, nil
+}
+
+func (p *parser) parseTypeExpression() (ast.Expression, error) {
+	start := p.peek()
+	if !isNameToken(start) {
+		return nil, p.error(start, "expected type name")
+	}
+	var name strings.Builder
+	name.WriteString(p.advance().Lexeme)
+	for p.match(token.Dot) {
+		part, err := p.expectName("expected type name after '.'")
+		if err != nil {
+			return nil, err
+		}
+		name.WriteByte('.')
+		name.WriteString(part.Lexeme)
+	}
+	if p.match(token.LBracket) {
+		name.WriteByte('[')
+		for {
+			argument, err := p.parseTypeExpression()
+			if err != nil {
+				return nil, err
+			}
+			name.WriteString(argument.(*ast.TypeExpression).Name)
+			if !p.match(token.Comma) {
+				break
+			}
+			name.WriteString(", ")
+		}
+		if _, err := p.expect(token.RBracket, "expected ']' after type arguments"); err != nil {
+			return nil, err
+		}
+		name.WriteByte(']')
+	}
+	return &ast.TypeExpression{Base: spanFrom(start.Span.Start, p.previous().Span.End), Name: name.String()}, nil
+}
+
 func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 	var elements []ast.Expression
+	for p.match(token.Comment) {
+	}
 	if !p.at(token.RBracket) {
 		for {
 			element, err := p.parseExpression(0)
@@ -162,8 +256,12 @@ func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 				return nil, err
 			}
 			elements = append(elements, element)
+			for p.match(token.Comment) {
+			}
 			if !p.match(token.Comma) {
 				break
+			}
+			for p.match(token.Comment) {
 			}
 			if p.at(token.RBracket) {
 				break
@@ -179,6 +277,8 @@ func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 
 func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 	var entries []ast.DictionaryEntry
+	for p.match(token.Comment) {
+	}
 	if !p.at(token.RBrace) {
 		for {
 			key, err := p.parseExpression(0)
@@ -193,8 +293,12 @@ func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 				return nil, err
 			}
 			entries = append(entries, ast.DictionaryEntry{Key: key, Value: value})
+			for p.match(token.Comment) {
+			}
 			if !p.match(token.Comma) {
 				break
+			}
+			for p.match(token.Comment) {
 			}
 			if p.at(token.RBrace) {
 				break

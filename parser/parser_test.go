@@ -110,3 +110,61 @@ func TestSyntaxErrorIncludesFilenameAndPosition(t *testing.T) {
 		t.Fatalf("error = %q", err)
 	}
 }
+
+func TestModernGodotSyntax(t *testing.T) {
+	source := `@abstract
+class_name Example extends RefCounted
+
+enum State {
+	## Waiting state.
+	IDLE,
+	RUNNING,
+}
+
+static var enabled: bool = true
+var title: StringName = &"title"
+var property: int = 1:
+	get():
+		return property
+	set(value): property = value; changed.emit()
+
+signal changed
+
+func transform(values: Array[Dictionary]) -> Array:
+	var callbacks: Array[Callable] = [
+		func(value: int) -> int:
+			if value > 0:
+				return value
+			return 0,
+	]
+	for value: Dictionary in values:
+		if value is not Dictionary:
+			continue
+		callbacks.append(func() -> void: print(^"position:x"))
+	return callbacks
+
+@abstract func execute(value: Variant) -> void
+`
+	file, err := parser.Parse("modern.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := gdformat.File(file)
+	if _, err := parser.Parse("modern.gd", []byte(formatted)); err != nil {
+		t.Fatalf("formatted modern syntax did not parse: %v\n%s", err, formatted)
+	}
+}
+
+func TestTopLevelCommentAfterFunctionIsNotInFunctionBody(t *testing.T) {
+	file, err := parser.Parse("", []byte("func first():\n\tpass\n\n## Documents second.\nfunc second():\n\tpass\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := file.Statements[0].(*ast.FunctionDeclaration)
+	if len(first.Body) != 1 {
+		t.Fatalf("first function body contains %d nodes, want 1", len(first.Body))
+	}
+	if _, ok := file.Statements[1].(*ast.Comment); !ok {
+		t.Fatalf("top-level statement 1 = %T, want *ast.Comment", file.Statements[1])
+	}
+}

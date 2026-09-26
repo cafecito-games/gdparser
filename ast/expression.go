@@ -4,11 +4,13 @@ package ast
 type LiteralKind string
 
 const (
-	IntegerLiteral LiteralKind = "integer"
-	FloatLiteral   LiteralKind = "float"
-	StringLiteral  LiteralKind = "string"
-	BoolLiteral    LiteralKind = "bool"
-	NullLiteral    LiteralKind = "null"
+	IntegerLiteral    LiteralKind = "integer"
+	FloatLiteral      LiteralKind = "float"
+	StringLiteral     LiteralKind = "string"
+	StringNameLiteral LiteralKind = "string_name"
+	NodePathLiteral   LiteralKind = "node_path"
+	BoolLiteral       LiteralKind = "bool"
+	NullLiteral       LiteralKind = "null"
 )
 
 // Literal is a scalar literal. Raw contains its exact GDScript spelling.
@@ -125,3 +127,24 @@ type NodePathExpression struct {
 
 func (*NodePathExpression) node()       {}
 func (*NodePathExpression) expression() {}
+
+// TypeExpression is a type name used by operators such as as and is.
+type TypeExpression struct {
+	Base
+	Name string `json:"name"`
+}
+
+func (*TypeExpression) node()       {}
+func (*TypeExpression) expression() {}
+
+// LambdaExpression is an anonymous function expression.
+type LambdaExpression struct {
+	Base
+	Parameters []Parameter `json:"parameters"`
+	ReturnType string      `json:"return_type,omitempty"`
+	Body       []Statement `json:"body"`
+	Inline     bool        `json:"inline,omitempty"`
+}
+
+func (*LambdaExpression) node()       {}
+func (*LambdaExpression) expression() {}

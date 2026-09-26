@@ -61,8 +61,9 @@ func (*Comment) statement() {}
 // Directive represents file/class directives such as extends and class_name.
 type Directive struct {
 	Base
-	Name  string     `json:"name"`
-	Value Expression `json:"value,omitempty"`
+	Name    string     `json:"name"`
+	Value   Expression `json:"value,omitempty"`
+	Extends Expression `json:"extends,omitempty"`
 }
 
 func (*Directive) node()      {}

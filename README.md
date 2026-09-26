@@ -116,18 +116,19 @@ cat player.gd | gdparser -format tree -
 
 - Indentation-sensitive blocks and source spans
 - Comments, documentation comments, annotations, `class_name`, and `extends`
-- `var`, `const`, typed/inferred declarations, assignments, signals, and enums
-- Functions, parameters/defaults, return types, static functions, and inner
-  classes
+- `var`, `const`, static variables, typed/inferred declarations, property
+  getters/setters, assignments, signals, and documented enums
+- Functions, lambdas, parameters/defaults, return types, abstract/static
+  functions, and inner classes
 - `if`/`elif`/`else`, `while`, `for`, `match`, `return`, `pass`, `break`, and
   `continue`
-- Scalar, array, and dictionary literals; calls; member/subscript access;
-  node paths; unary, binary, cast, membership, and ternary expressions
+- Scalar, StringName, NodePath, array, and dictionary literals; calls;
+  member/subscript access; node shortcuts; unary, binary, cast, membership,
+  and ternary expressions
 - Single-, double-, and triple-quoted strings
 
-Near-term work includes lambdas, property getter/setter blocks, richer match
-patterns, multiline continuation edge cases, and full conformance testing
-against Godot's own parser. Syntax choices follow the official
+Near-term work includes richer match patterns, exact trivia preservation, and
+full conformance testing against Godot's own parser. Syntax choices follow the official
 [GDScript reference](https://docs.godotengine.org/en/stable/tutorials/scripting/gdscript/gdscript_basics.html).
 
 ## Development
@@ -137,6 +138,15 @@ go test -race ./...
 go vet ./...
 go build ./cmd/gdparser
 ```
+
+To validate a larger external GDScript tree, enable the opt-in corpus test:
+
+```sh
+GDPARSER_CORPUS=/path/to/godot/project go test -run TestCorpus -v .
+```
+
+The corpus test parses every `.gd` file, emits canonical GDScript, reparses it,
+and verifies that the normalized AST is structurally unchanged.
 
 Contributions should include parser and formatter round-trip coverage for new
 syntax. This project is available under the [MIT License](LICENSE).

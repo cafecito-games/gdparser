@@ -57,6 +57,7 @@ func Children(node Node) []Node {
 		}
 	case *Directive:
 		addExpr(n.Value)
+		addExpr(n.Extends)
 	case *UnaryExpression:
 		addExpr(n.Operand)
 	case *BinaryExpression:
@@ -85,10 +86,19 @@ func Children(node Node) []Node {
 			addExpr(entry.Key)
 			addExpr(entry.Value)
 		}
+	case *LambdaExpression:
+		for _, parameter := range n.Parameters {
+			addExpr(parameter.Default)
+		}
+		addStmts(n.Body)
 	case *ExpressionStatement:
 		addExpr(n.Expression)
 	case *VariableDeclaration:
 		addExpr(n.Value)
+		addStmts(n.Getter)
+		if n.Setter != nil {
+			addStmts(n.Setter.Body)
+		}
 	case *Assignment:
 		addExpr(n.Target)
 		addExpr(n.Value)
@@ -119,6 +129,9 @@ func Children(node Node) []Node {
 		}
 	case *EnumDeclaration:
 		for _, member := range n.Members {
+			for _, comment := range member.Comments {
+				out = append(out, comment)
+			}
 			addExpr(member.Value)
 		}
 	case *MatchStatement:

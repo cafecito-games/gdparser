@@ -74,6 +74,9 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 		if compound {
 			continue
 		}
+		if p.match(token.Semicolon) {
+			continue
+		}
 		if p.at(token.Comment) {
 			comment := p.advance()
 			statements = append(statements, commentNode(comment))
@@ -102,15 +105,27 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		stmt, err := p.parseDirective()
 		return stmt, false, err
 	case token.Var, token.Const:
-		stmt, err := p.parseVariable()
-		return stmt, false, err
+		stmt, err := p.parseVariable(false)
+		compound := statementHasBlockLambda(stmt)
+		if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
+			compound = compound || declaration.Getter != nil || declaration.Setter != nil
+		}
+		return stmt, compound, err
 	case token.Static:
 		start := p.advance()
-		if _, err := p.expect(token.Func, "expected func after static"); err != nil {
-			return nil, false, err
+		if p.match(token.Func) {
+			stmt, err := p.parseFunction(start, true)
+			return stmt, true, err
 		}
-		stmt, err := p.parseFunction(start, true)
-		return stmt, true, err
+		if p.match(token.Var) {
+			stmt, err := p.parseVariableAfter(start, false, true)
+			compound := statementHasBlockLambda(stmt)
+			if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
+				compound = compound || declaration.Getter != nil || declaration.Setter != nil
+			}
+			return stmt, compound, err
+		}
+		return nil, false, p.error(p.peek(), "expected func or var after static")
 	case token.Func:
 		start := p.advance()
 		stmt, err := p.parseFunction(start, false)
@@ -138,13 +153,13 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		return stmt, true, err
 	case token.Return:
 		stmt, err := p.parseReturn()
-		return stmt, false, err
+		return stmt, statementHasBlockLambda(stmt), err
 	case token.Pass, token.Break, token.Continue:
 		tok := p.advance()
 		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme}, false, nil
 	default:
 		stmt, err := p.parseExpressionStatement()
-		return stmt, false, err
+		return stmt, statementHasBlockLambda(stmt), err
 	}
 }
 
@@ -152,14 +167,46 @@ func (p *parser) parseSuite() ([]ast.Statement, token.Position, error) {
 	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
 		return nil, token.Position{}, err
 	}
-	if p.match(token.Pass) {
-		end := p.previous().Span.End
-		return []ast.Statement{&ast.KeywordStatement{Base: base(p.previous().Span), Keyword: "pass"}}, end, nil
+	var headerComment ast.Statement
+	if p.at(token.Comment) {
+		headerComment = commentNode(p.advance())
+	}
+	if !p.at(token.Newline) {
+		stmt, _, err := p.parseStatement()
+		if err != nil {
+			return nil, token.Position{}, err
+		}
+		body := []ast.Statement{}
+		if headerComment != nil {
+			body = append(body, headerComment)
+		}
+		body = append(body, stmt)
+		for p.match(token.Semicolon) {
+			if p.at(token.Newline, token.Comment) {
+				break
+			}
+			next, _, nextErr := p.parseStatement()
+			if nextErr != nil {
+				return nil, token.Position{}, nextErr
+			}
+			body = append(body, next)
+		}
+		if p.at(token.Comment) {
+			body = append(body, commentNode(p.advance()))
+		}
+		end := stmt.Span().End
+		if len(body) > 0 {
+			end = body[len(body)-1].Span().End
+		}
+		return body, end, nil
 	}
 	if _, err := p.expect(token.Newline, "expected newline before block"); err != nil {
 		return nil, token.Position{}, err
 	}
 	var leading []ast.Statement
+	if headerComment != nil {
+		leading = append(leading, headerComment)
+	}
 	for {
 		for p.match(token.Newline) {
 		}
@@ -234,6 +281,36 @@ func (p *parser) previous() token.Token { return p.tokens[p.current-1] }
 
 func (p *parser) error(tok token.Token, message string) error {
 	return &Error{Filename: p.filename, Token: tok, Message: message}
+}
+
+func statementHasBlockLambda(statement ast.Statement) bool {
+	if statement == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(statement, func(node ast.Node) bool {
+		if lambda, ok := node.(*ast.LambdaExpression); ok && !lambda.Inline {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+func isNameToken(tok token.Token) bool {
+	if tok.Lexeme == "" {
+		return false
+	}
+	c := tok.Lexeme[0]
+	return c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+func (p *parser) expectName(message string) (token.Token, error) {
+	if isNameToken(p.peek()) {
+		return p.advance(), nil
+	}
+	return token.Token{}, p.error(p.peek(), message)
 }
 
 func base(span token.Span) ast.Base { return ast.Base{SourceSpan: span} }

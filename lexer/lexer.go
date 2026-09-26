@@ -34,19 +34,22 @@ func Lex(source []byte) ([]token.Token, error) {
 }
 
 type lexer struct {
-	source  []byte
-	offset  int
-	line    int
-	column  int
-	atStart bool
-	depth   int
-	indents []int
-	tokens  []token.Token
+	source            []byte
+	offset            int
+	line              int
+	column            int
+	atStart           bool
+	depth             int
+	layoutDepth       int
+	layoutIndentDepth int
+	lambdaHeaderDepth int
+	indents           []int
+	tokens            []token.Token
 }
 
 func (l *lexer) run() error {
 	for !l.done() {
-		if l.atStart && l.depth == 0 {
+		if l.atStart && l.depth == l.layoutDepth {
 			if err := l.scanIndent(); err != nil {
 				return err
 			}
@@ -62,10 +65,12 @@ func (l *lexer) run() error {
 			l.advance()
 		case c == '\n':
 			l.advance()
-			if l.depth == 0 {
+			if l.depth == l.layoutDepth {
 				l.emit(token.Newline, "", start)
 			}
 			l.atStart = true
+		case c == '\\' && l.peekN(1) == '\n':
+			l.scanContinuation()
 		case c == '#':
 			l.scanComment(start)
 		case isIdentifierStart(c):
@@ -114,8 +119,9 @@ func (l *lexer) scanIndent() error {
 	}
 
 measured:
-	// Blank and comment-only lines do not affect the indentation stack.
-	if l.done() || l.peek() == '\n' || l.peek() == '\r' || l.peek() == '#' {
+	// Blank lines do not affect the indentation stack. Comment indentation is
+	// significant to the AST even though Godot ignores it syntactically.
+	if l.done() || l.peek() == '\n' || l.peek() == '\r' {
 		return nil
 	}
 	l.atStart = false
@@ -147,6 +153,15 @@ func (l *lexer) scanComment(start token.Position) {
 	l.emit(token.Comment, string(l.source[begin:l.offset]), start)
 }
 
+func (l *lexer) scanContinuation() {
+	l.advance() // backslash
+	l.advance() // newline
+	for !l.done() && (l.peek() == ' ' || l.peek() == '\t' || l.peek() == '\r') {
+		l.advance()
+	}
+	l.atStart = false
+}
+
 func (l *lexer) scanIdentifier(start token.Position) {
 	l.atStart = false
 	begin := l.offset
@@ -154,7 +169,11 @@ func (l *lexer) scanIdentifier(start token.Position) {
 		l.advance()
 	}
 	text := string(l.source[begin:l.offset])
-	l.emit(token.LookupIdentifier(text), text, start)
+	typ := token.LookupIdentifier(text)
+	l.emit(typ, text, start)
+	if typ == token.Func && l.depth > l.layoutDepth {
+		l.lambdaHeaderDepth = l.depth
+	}
 }
 
 func (l *lexer) scanNumber(start token.Position) {
@@ -173,7 +192,7 @@ func (l *lexer) scanNumber(start token.Position) {
 		l.advance()
 	}
 	typ := token.Integer
-	if l.peek() == '.' && isDigit(l.peekN(1)) {
+	if l.peek() == '.' && l.peekN(1) != '.' {
 		typ = token.Float
 		l.advance()
 		for !l.done() && (isDigit(l.peek()) || l.peek() == '_') {
@@ -237,6 +256,7 @@ func (l *lexer) scanOperator(start token.Position) error {
 		typ  token.Type
 	}{
 		{"<<=", token.ShiftLeftAssign}, {">>=", token.ShiftRightAssign},
+		{"&&", token.And}, {"||", token.Or},
 		{"**", token.DoubleStar}, {"->", token.Arrow}, {":=", token.InferAssign},
 		{"==", token.Equal}, {"!=", token.NotEqual}, {"<=", token.LessEqual},
 		{">=", token.GreaterEqual}, {"<<", token.ShiftLeft}, {">>", token.ShiftRight},
@@ -244,7 +264,7 @@ func (l *lexer) scanOperator(start token.Position) error {
 		{"/=", token.SlashAssign}, {"%=", token.PercentAssign}, {"&=", token.AmpAssign},
 		{"|=", token.PipeAssign}, {"^=", token.CaretAssign},
 		{"(", token.LParen}, {")", token.RParen}, {"[", token.LBracket}, {"]", token.RBracket},
-		{"{", token.LBrace}, {"}", token.RBrace}, {",", token.Comma}, {":", token.Colon},
+		{"{", token.LBrace}, {"}", token.RBrace}, {",", token.Comma}, {";", token.Semicolon}, {":", token.Colon},
 		{".", token.Dot}, {"@", token.At}, {"$", token.Dollar}, {"%", token.Percent},
 		{"=", token.Assign}, {"+", token.Plus}, {"-", token.Minus}, {"*", token.Star},
 		{"/", token.Slash}, {"<", token.Less}, {">", token.Greater}, {"&", token.Ampersand},
@@ -253,6 +273,12 @@ func (l *lexer) scanOperator(start token.Position) error {
 	remaining := string(l.source[l.offset:])
 	for _, op := range operators {
 		if strings.HasPrefix(remaining, op.text) {
+			if op.typ == token.Comma && l.layoutDepth > 0 && l.depth == l.layoutDepth {
+				l.endLambdaLayout(start)
+			}
+			if (op.typ == token.RParen || op.typ == token.RBracket || op.typ == token.RBrace) && l.layoutDepth > 0 && l.depth == l.layoutDepth {
+				l.endLambdaLayout(start)
+			}
 			for range len(op.text) {
 				l.advance()
 			}
@@ -263,13 +289,52 @@ func (l *lexer) scanOperator(start token.Position) error {
 				if l.depth > 0 {
 					l.depth--
 				}
+				if l.layoutDepth > 0 && l.depth < l.layoutDepth {
+					l.layoutDepth = 0
+					l.layoutIndentDepth = 0
+					l.lambdaHeaderDepth = 0
+				}
 			}
 			l.emit(op.typ, op.text, start)
+			if op.typ == token.Colon && l.lambdaHeaderDepth == l.depth {
+				if l.blockFollows() {
+					l.layoutDepth = l.depth
+					l.layoutIndentDepth = len(l.indents)
+				}
+				l.lambdaHeaderDepth = 0
+			}
 			return nil
 		}
 	}
 	r, _ := utf8.DecodeRune(l.source[l.offset:])
 	return &Error{Position: start, Message: fmt.Sprintf("unexpected character %q", r)}
+}
+
+func (l *lexer) endLambdaLayout(position token.Position) {
+	if len(l.tokens) > 0 && l.tokens[len(l.tokens)-1].Type != token.Newline && l.tokens[len(l.tokens)-1].Type != token.Dedent {
+		l.emit(token.Newline, "", position)
+	}
+	for len(l.indents) > l.layoutIndentDepth {
+		l.indents = l.indents[:len(l.indents)-1]
+		l.emit(token.Dedent, "", position)
+	}
+	l.layoutDepth = 0
+	l.layoutIndentDepth = 0
+	l.lambdaHeaderDepth = 0
+}
+
+func (l *lexer) blockFollows() bool {
+	for offset := l.offset; offset < len(l.source); offset++ {
+		switch l.source[offset] {
+		case ' ', '\t', '\r':
+			continue
+		case '\n', '#':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (l *lexer) emit(typ token.Type, lexeme string, start token.Position) {

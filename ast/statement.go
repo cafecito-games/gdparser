@@ -12,11 +12,14 @@ func (*ExpressionStatement) statement() {}
 // VariableDeclaration declares var or const.
 type VariableDeclaration struct {
 	Base
-	Name     string     `json:"name"`
-	Type     string     `json:"type,omitempty"`
-	Value    Expression `json:"value,omitempty"`
-	Constant bool       `json:"constant,omitempty"`
-	Inferred bool       `json:"inferred,omitempty"`
+	Name     string          `json:"name"`
+	Type     string          `json:"type,omitempty"`
+	Value    Expression      `json:"value,omitempty"`
+	Constant bool            `json:"constant,omitempty"`
+	Inferred bool            `json:"inferred,omitempty"`
+	Static   bool            `json:"static,omitempty"`
+	Getter   []Statement     `json:"getter,omitempty"`
+	Setter   *PropertySetter `json:"setter,omitempty"`
 }
 
 func (*VariableDeclaration) node()      {}
@@ -72,6 +75,7 @@ func (*WhileStatement) statement() {}
 type ForStatement struct {
 	Base
 	Variable string      `json:"variable"`
+	Type     string      `json:"type,omitempty"`
 	Iterable Expression  `json:"iterable"`
 	Body     []Statement `json:"body"`
 }
@@ -102,6 +106,7 @@ type FunctionDeclaration struct {
 	Parameters []Parameter `json:"parameters"`
 	ReturnType string      `json:"return_type,omitempty"`
 	Static     bool        `json:"static,omitempty"`
+	Abstract   bool        `json:"abstract,omitempty"`
 	Body       []Statement `json:"body"`
 }
 
@@ -131,8 +136,15 @@ func (*SignalDeclaration) statement() {}
 
 // EnumMember is one enum value.
 type EnumMember struct {
-	Name  string     `json:"name"`
-	Value Expression `json:"value,omitempty"`
+	Name     string     `json:"name"`
+	Value    Expression `json:"value,omitempty"`
+	Comments []*Comment `json:"comments,omitempty"`
+}
+
+// PropertySetter stores a property's setter parameter and body.
+type PropertySetter struct {
+	Parameter string      `json:"parameter"`
+	Body      []Statement `json:"body"`
 }
 
 // EnumDeclaration declares a named or anonymous enum.
