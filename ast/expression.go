@@ -1,5 +1,7 @@
 package ast
 
+import "github.com/cafecito-games/gdparser/token"
+
 // LiteralKind distinguishes the lexical form of a literal.
 type LiteralKind string
 
@@ -35,8 +37,9 @@ func (*Identifier) expression() {}
 // UnaryExpression applies a prefix operator.
 type UnaryExpression struct {
 	Base
-	Operator string     `json:"operator"`
-	Operand  Expression `json:"operand"`
+	Operator     string     `json:"operator"`
+	OperatorSpan token.Span `json:"operator_span,omitempty"`
+	Operand      Expression `json:"operand"`
 }
 
 func (*UnaryExpression) node()       {}
@@ -45,9 +48,10 @@ func (*UnaryExpression) expression() {}
 // BinaryExpression applies an infix operator.
 type BinaryExpression struct {
 	Base
-	Left     Expression `json:"left"`
-	Operator string     `json:"operator"`
-	Right    Expression `json:"right"`
+	Left         Expression `json:"left"`
+	Operator     string     `json:"operator"`
+	OperatorSpan token.Span `json:"operator_span,omitempty"`
+	Right        Expression `json:"right"`
 }
 
 func (*BinaryExpression) node()       {}
@@ -57,7 +61,9 @@ func (*BinaryExpression) expression() {}
 type TernaryExpression struct {
 	Base
 	Value       Expression `json:"value"`
+	IfSpan      token.Span `json:"if_span,omitempty"`
 	Condition   Expression `json:"condition"`
+	ElseSpan    token.Span `json:"else_span,omitempty"`
 	Alternative Expression `json:"alternative"`
 }
 
@@ -77,8 +83,9 @@ func (*CallExpression) expression() {}
 // MemberExpression accesses Object.Member.
 type MemberExpression struct {
 	Base
-	Object   Expression `json:"object"`
-	Property string     `json:"property"`
+	Object       Expression `json:"object"`
+	Property     string     `json:"property"`
+	PropertySpan token.Span `json:"property_span,omitempty"`
 }
 
 func (*MemberExpression) node()       {}
@@ -121,8 +128,10 @@ func (*DictionaryLiteral) expression() {}
 // NodePathExpression represents the $Node/Child and %UniqueNode shorthand.
 type NodePathExpression struct {
 	Base
-	Path   string `json:"path"`
-	Unique bool   `json:"unique,omitempty"`
+	Path       string     `json:"path"`
+	PathSpan   token.Span `json:"path_span,omitempty"`
+	Unique     bool       `json:"unique,omitempty"`
+	PrefixSpan token.Span `json:"prefix_span,omitempty"`
 }
 
 func (*NodePathExpression) node()       {}
@@ -140,10 +149,13 @@ func (*TypeExpression) expression() {}
 // LambdaExpression is an anonymous function expression.
 type LambdaExpression struct {
 	Base
-	Parameters []Parameter `json:"parameters"`
-	ReturnType string      `json:"return_type,omitempty"`
-	Body       []Statement `json:"body"`
-	Inline     bool        `json:"inline,omitempty"`
+	Parameters      []Parameter `json:"parameters"`
+	ReturnType      string      `json:"return_type,omitempty"`
+	ReturnTypeSpan  token.Span  `json:"return_type_span,omitempty"`
+	ReturnArrowSpan token.Span  `json:"return_arrow_span,omitempty"`
+	KeywordSpan     token.Span  `json:"keyword_span,omitempty"`
+	Body            []Statement `json:"body"`
+	Inline          bool        `json:"inline,omitempty"`
 }
 
 func (*LambdaExpression) node()       {}

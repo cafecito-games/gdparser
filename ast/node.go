@@ -21,7 +21,9 @@ type Expression interface {
 	expression()
 }
 
-// Base stores source location data embedded by concrete nodes.
+// Base stores source location data embedded by concrete nodes and source
+// components. Spans describe the original parsed source. Mutating AST values
+// does not update them; programmatically constructed trees may leave them zero.
 type Base struct {
 	SourceSpan token.Span `json:"span"`
 }
@@ -42,6 +44,7 @@ func (*File) node() {}
 type Annotation struct {
 	Base
 	Name      string       `json:"name"`
+	NameSpan  token.Span   `json:"name_span,omitempty"`
 	Arguments []Expression `json:"arguments,omitempty"`
 }
 
@@ -61,9 +64,11 @@ func (*Comment) statement() {}
 // Directive represents file/class directives such as extends and class_name.
 type Directive struct {
 	Base
-	Name    string     `json:"name"`
-	Value   Expression `json:"value,omitempty"`
-	Extends Expression `json:"extends,omitempty"`
+	Name        string     `json:"name"`
+	KeywordSpan token.Span `json:"keyword_span,omitempty"`
+	Value       Expression `json:"value,omitempty"`
+	Extends     Expression `json:"extends,omitempty"`
+	ExtendsSpan token.Span `json:"extends_span,omitempty"`
 }
 
 func (*Directive) node()      {}

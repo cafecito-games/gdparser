@@ -211,6 +211,11 @@ column positions. Nodes are mutable Go structs. Each frontend provides
 traversal, tree-dump, and JSON conversion facilities with explicit node-kind
 discriminators.
 
+Parsed GDScript nodes also retain precise component spans for authored names,
+types, keywords, and operators. These spans always refer to the original input:
+mutating an AST does not recompute them, so they may become stale. Trees built
+programmatically may leave source and component spans at their zero values.
+
 Formatting is canonical rather than lossless. The emitter preserves program
 structure and comments, but it may normalize indentation, spacing, parentheses,
 blank lines, and literal spelling. If exact source trivia is required, retain
