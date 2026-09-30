@@ -100,25 +100,27 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		return stmt, !p.at(token.Newline) && !p.at(token.Comment), err
 	case token.Tool:
 		tok := p.advance()
-		return &ast.Directive{Base: base(tok.Span), Name: tok.Lexeme}, false, nil
+		return &ast.Directive{Base: base(tok.Span), Name: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
 	case token.Extends, token.ClassName:
 		stmt, err := p.parseDirective()
 		return stmt, false, err
 	case token.Var, token.Const:
-		stmt, err := p.parseVariable(false)
+		stmt, err := p.parseVariable()
 		compound := statementHasBlockLambda(stmt)
 		if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
 			compound = compound || declaration.Getter != nil || declaration.Setter != nil
 		}
 		return stmt, compound, err
 	case token.Static:
-		start := p.advance()
-		if p.match(token.Func) {
-			stmt, err := p.parseFunction(start, true)
+		static := p.advance()
+		if p.at(token.Func) {
+			keyword := p.advance()
+			stmt, err := p.parseFunction(keyword, static)
 			return stmt, true, err
 		}
-		if p.match(token.Var) {
-			stmt, err := p.parseVariableAfter(start, false, true)
+		if p.at(token.Var) {
+			keyword := p.advance()
+			stmt, err := p.parseVariableAfter(keyword, static, false)
 			compound := statementHasBlockLambda(stmt)
 			if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
 				compound = compound || declaration.Getter != nil || declaration.Setter != nil
@@ -127,8 +129,8 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		}
 		return nil, false, p.error(p.peek(), "expected func or var after static")
 	case token.Func:
-		start := p.advance()
-		stmt, err := p.parseFunction(start, false)
+		keyword := p.advance()
+		stmt, err := p.parseFunction(keyword, token.Token{})
 		return stmt, true, err
 	case token.Class:
 		stmt, err := p.parseClass()
@@ -156,7 +158,7 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		return stmt, statementHasBlockLambda(stmt), err
 	case token.Pass, token.Break, token.Continue:
 		tok := p.advance()
-		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme}, false, nil
+		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
 	default:
 		stmt, err := p.parseExpressionStatement()
 		return stmt, statementHasBlockLambda(stmt), err

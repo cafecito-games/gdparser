@@ -143,14 +143,32 @@ func normalizedJSON(node ast.Node, root bool) any {
 	return normalizeValue(ast.JSONValue(node), root)
 }
 
+func TestNormalizeValueIgnoresSourceMetadata(t *testing.T) {
+	value := map[string]any{
+		"span":         map[string]any{"start": 1},
+		"keyword_span": map[string]any{"start": 2},
+		"child": map[string]any{
+			"name":      "semantic",
+			"name_span": map[string]any{"start": 3},
+		},
+	}
+	want := map[string]any{"child": map[string]any{"name": "semantic"}}
+	if got := normalizeValue(value, false); !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized value = %#v, want %#v", got, want)
+	}
+}
+
 func normalizeValue(value any, root bool) any {
 	switch current := value.(type) {
 	case map[string]any:
-		delete(current, "span")
 		if root {
 			delete(current, "name")
 		}
 		for key, child := range current {
+			if key == "span" || strings.HasSuffix(key, "_span") {
+				delete(current, key)
+				continue
+			}
 			current[key] = normalizeValue(child, false)
 		}
 		return current

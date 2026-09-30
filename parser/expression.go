@@ -31,16 +31,20 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 			break
 		}
 		start := left.Span().Start
-		p.advance()
+		operatorStart := p.advance()
+		operatorEnd := operatorStart
 		if operator == "not in" || operator == "is not" {
-			p.advance()
+			operatorEnd = p.advance()
 		}
+		operatorSpan := token.Span{Start: operatorStart.Span.Start, End: operatorEnd.Span.End}
 		if typ == token.As || typ == token.Is {
 			right, typeErr := p.parseTypeExpression()
 			if typeErr != nil {
 				return nil, typeErr
 			}
-			left = &ast.BinaryExpression{Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, Right: right}
+			left = &ast.BinaryExpression{
+				Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, OperatorSpan: operatorSpan, Right: right,
+			}
 			continue
 		}
 		nextMin := precedence + 1
@@ -51,23 +55,30 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		left = &ast.BinaryExpression{Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, Right: right}
+		left = &ast.BinaryExpression{
+			Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, OperatorSpan: operatorSpan, Right: right,
+		}
 	}
 
-	if minPrecedence == 0 && p.match(token.If) {
+	if minPrecedence == 0 && p.at(token.If) {
 		start := left.Span().Start
+		ifToken := p.advance()
 		condition, err := p.parseExpression(0)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(token.Else, "expected else in ternary expression"); err != nil {
+		elseToken, err := p.expect(token.Else, "expected else in ternary expression")
+		if err != nil {
 			return nil, err
 		}
 		alternative, err := p.parseExpression(0)
 		if err != nil {
 			return nil, err
 		}
-		left = &ast.TernaryExpression{Base: spanFrom(start, alternative.Span().End), Value: left, Condition: condition, Alternative: alternative}
+		left = &ast.TernaryExpression{
+			Base: spanFrom(start, alternative.Span().End), Value: left, IfSpan: ifToken.Span,
+			Condition: condition, ElseSpan: elseToken.Span, Alternative: alternative,
+		}
 	}
 	return left, nil
 }
@@ -108,7 +119,9 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ast.UnaryExpression{Base: spanFrom(tok.Span.Start, operand.Span().End), Operator: tok.Lexeme, Operand: operand}, nil
+		return &ast.UnaryExpression{
+			Base: spanFrom(tok.Span.Start, operand.Span().End), Operator: tok.Lexeme, OperatorSpan: tok.Span, Operand: operand,
+		}, nil
 	case token.LParen:
 		expr, err := p.parseExpression(0)
 		if err != nil {
@@ -170,7 +183,10 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 			if err != nil {
 				return nil, err
 			}
-			expr = &ast.MemberExpression{Base: spanFrom(expr.Span().Start, property.Span.End), Object: expr, Property: property.Lexeme}
+			expr = &ast.MemberExpression{
+				Base: spanFrom(expr.Span().Start, property.Span.End), Object: expr,
+				Property: property.Lexeme, PropertySpan: property.Span,
+			}
 		case p.match(token.LBracket):
 			index, err := p.parseExpression(0)
 			if err != nil {
@@ -193,8 +209,10 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		return nil, err
 	}
 	returnType := ""
-	if p.match(token.Arrow) {
-		returnType = p.parseTypeUntil(token.Colon)
+	var returnArrowSpan, returnTypeSpan token.Span
+	if p.at(token.Arrow) {
+		returnArrowSpan = p.advance().Span
+		returnType, returnTypeSpan = p.parseTypeUntil(token.Colon)
 		if returnType == "" {
 			return nil, p.error(p.peek(), "expected lambda return type")
 		}
@@ -205,7 +223,9 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		return nil, err
 	}
 	return &ast.LambdaExpression{
-		Base: spanFrom(start.Span.Start, end), Parameters: parameters, ReturnType: returnType, Body: body, Inline: inline,
+		Base: spanFrom(start.Span.Start, end), Parameters: parameters, ReturnType: returnType,
+		ReturnTypeSpan: returnTypeSpan, ReturnArrowSpan: returnArrowSpan, KeywordSpan: start.Span,
+		Body: body, Inline: inline,
 	}, nil
 }
 
@@ -314,17 +334,28 @@ func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 
 func (p *parser) parseNodePath(start token.Token) (ast.Expression, error) {
 	var path strings.Builder
+	var pathSpan token.Span
 	if p.at(token.String) {
-		path.WriteString(p.advance().Lexeme)
+		value := p.advance()
+		path.WriteString(value.Lexeme)
+		pathSpan = value.Span
 	} else {
 		for p.at(token.Identifier, token.Slash) {
-			path.WriteString(p.advance().Lexeme)
+			part := p.advance()
+			path.WriteString(part.Lexeme)
+			if pathSpan == (token.Span{}) {
+				pathSpan.Start = part.Span.Start
+			}
+			pathSpan.End = part.Span.End
 		}
 	}
 	if path.Len() == 0 {
 		return nil, p.error(p.peek(), "expected node path")
 	}
-	return &ast.NodePathExpression{Base: spanFrom(start.Span.Start, p.previous().Span.End), Path: path.String(), Unique: start.Type == token.Percent}, nil
+	return &ast.NodePathExpression{
+		Base: spanFrom(start.Span.Start, p.previous().Span.End), Path: path.String(), PathSpan: pathSpan,
+		Unique: start.Type == token.Percent, PrefixSpan: start.Span,
+	}, nil
 }
 
 func infixPrecedence(typ token.Type) (int, bool) {
