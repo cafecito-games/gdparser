@@ -279,12 +279,19 @@ func (p *parser) parseTypeExpression() (ast.Expression, error) {
 }
 
 func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
+	return p.parseArrayOf(start, func() (ast.Expression, error) { return p.parseExpression(0) })
+}
+
+// parseArrayOf parses a bracketed element list, reading each element with
+// parseElement. A match pattern reads its elements as patterns rather than as
+// expressions, which is the only difference between the two forms.
+func (p *parser) parseArrayOf(start token.Token, parseElement func() (ast.Expression, error)) (ast.Expression, error) {
 	var elements []ast.Expression
 	var comments []ast.CollectionComment
 	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RBracket) {
 		for {
-			element, err := p.parseExpression(0)
+			element, err := parseElement()
 			if err != nil {
 				return nil, err
 			}
@@ -309,6 +316,13 @@ func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 }
 
 func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
+	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(0) })
+}
+
+// parseDictionaryOf parses a braced entry list, reading each value with
+// parseValue. A match pattern reads its values as patterns; its keys stay
+// expressions, as Godot's dictionary pattern does.
+func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Expression, error)) (ast.Expression, error) {
 	var entries []ast.DictionaryEntry
 	var comments []ast.CollectionComment
 	p.takeCollectionComments(&comments, 0)
@@ -321,7 +335,7 @@ func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 			if _, err := p.expect(token.Colon, "expected ':' after dictionary key"); err != nil {
 				return nil, err
 			}
-			value, err := p.parseExpression(0)
+			value, err := parseValue()
 			if err != nil {
 				return nil, err
 			}
@@ -414,4 +428,32 @@ func stringLiteral(nodeBase ast.Base, kind ast.LiteralKind, prefix, lexeme strin
 	literal.Quote = body[0]
 	literal.Triple = len(body) >= 6 && body[1] == literal.Quote && body[2] == literal.Quote
 	return literal
+}
+
+// parsePattern parses one match pattern. A pattern is an expression, except
+// that it may also bind the matched value with "var name", and that an array or
+// dictionary pattern holds patterns rather than expressions.
+func (p *parser) parsePattern() (ast.Expression, error) {
+	switch {
+	case p.at(token.Var):
+		keyword := p.advance()
+		// A bind name is a plain identifier. The wildcard "_" names nothing, so
+		// Godot rejects it here even though it is a pattern of its own.
+		if p.peek().Type != token.Identifier || p.peek().Lexeme == "_" {
+			return nil, p.error(p.peek(), "expected bind name after 'var'")
+		}
+		name, err := p.expectName("expected bind name after 'var'")
+		if err != nil {
+			return nil, err
+		}
+		return &ast.BindingPattern{
+			Base: spanFrom(keyword.Span.Start, name.Span.End), Name: name.Lexeme,
+			NameSpan: name.Span, KeywordSpan: keyword.Span,
+		}, nil
+	case p.at(token.LBracket):
+		return p.parseArrayOf(p.advance(), p.parsePattern)
+	case p.at(token.LBrace):
+		return p.parseDictionaryOf(p.advance(), p.parsePattern)
+	}
+	return p.parseExpression(0)
 }

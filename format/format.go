@@ -562,6 +562,8 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 			entries[index] = concat(p.expression(entry.Key, 0), text(": "), p.expression(entry.Value, 0))
 		}
 		return p.collection(dictionaryLayout, entries, node.Comments)
+	case *ast.BindingPattern:
+		return text("var " + node.Name)
 	case *ast.LambdaExpression:
 		keyword := "func"
 		if node.Name != "" {
