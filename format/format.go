@@ -358,15 +358,18 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {
+	// A separating comma, the "when" of a guard and the branch's own colon all
+	// follow a pattern on its line, so a pattern or guard ending in a comment
+	// is parenthesized to keep them off it.
 	patterns := make([]doc, len(matchCase.Patterns))
 	for index, pattern := range matchCase.Patterns {
-		patterns[index] = p.expression(pattern, 0)
+		patterns[index] = p.headerExpression(pattern)
 	}
 	header := join(text(", "), patterns)
 	if matchCase.Guard != nil {
-		header = concat(header, text(" when "), p.expression(matchCase.Guard, 0))
+		header = concat(header, text(" when "), p.headerExpression(matchCase.Guard))
 	}
-	return concat(header, text(":"), p.suite(matchCase.Body))
+	return concat(closeAfter(header, ":"), p.suite(matchCase.Body))
 }
 
 // layout describes how a bracketed construct is broken across lines.

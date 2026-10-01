@@ -571,6 +571,11 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 			want:   "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
 		},
 		{
+			name:   "a match guard, whose colon follows it",
+			source: "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t):\n\t\t\tpass\n",
+			want:   "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t):\n\t\t\tpass\n",
+		},
+		{
 			name:   "a member access on a parenthesized lambda",
 			source: "var y = (func(): return 1  # c\n).call()\n",
 			want:   "var y = (func(): return 1  # c\n).call()\n",
