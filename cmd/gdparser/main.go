@@ -15,6 +15,7 @@ import (
 	"github.com/cafecito-games/gdparser/ast"
 	"github.com/cafecito-games/gdparser/configfile"
 	configast "github.com/cafecito-games/gdparser/configfile/ast"
+	"github.com/cafecito-games/gdparser/internal/version"
 	"github.com/cafecito-games/gdparser/shader"
 	shaderast "github.com/cafecito-games/gdparser/shader/ast"
 	"github.com/cafecito-games/gdparser/textresource"
@@ -28,12 +29,17 @@ func run(arguments []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	outputFormat := flags.String("format", "tree", "output format: tree, json, or source")
 	inputType := flags.String("type", "auto", "input type: auto, gdscript, resource, config, shader, or uid")
+	showVersion := flags.Bool("version", false, "print the gdparser version and exit")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: gdparser [-type auto|gdscript|resource|config|shader|uid] [-format tree|json|source] [file|-]")
+		fmt.Fprintln(stderr, "Usage: gdparser [-type auto|gdscript|resource|config|shader|uid] [-format tree|json|source] [-version] [file|-]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(arguments); err != nil {
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintf(stdout, "gdparser %s\n", version.Value)
+		return 0
 	}
 	if flags.NArg() > 1 {
 		flags.Usage()
