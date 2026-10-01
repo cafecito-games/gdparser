@@ -44,6 +44,7 @@ const (
 	Semicolon Type = ";"
 	Colon     Type = ":"
 	Dot       Type = "."
+	Ellipsis  Type = "..."
 	At        Type = "@"
 	Dollar    Type = "$"
 	Percent   Type = "%"

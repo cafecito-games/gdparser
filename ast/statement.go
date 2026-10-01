@@ -131,6 +131,11 @@ type Parameter struct {
 	TypeSpan            token.Span `json:"type_span,omitempty"`
 	Default             Expression `json:"default,omitempty"`
 	DefaultOperatorSpan token.Span `json:"default_operator_span,omitempty"`
+	// Variadic reports a rest parameter, written "...name", which collects the
+	// arguments that follow the parameters before it. It may only be the last
+	// parameter of a function or a lambda.
+	Variadic     bool       `json:"variadic,omitempty"`
+	VariadicSpan token.Span `json:"variadic_span,omitempty"`
 }
 
 // FunctionDeclaration declares a function.
