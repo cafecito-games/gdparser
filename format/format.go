@@ -206,22 +206,34 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 				parts = append(parts, hardLine)
 				keyword = "elif "
 			}
-			parts = append(parts, text(keyword), p.expression(branch.Condition, 0), text(":"), p.suite(branch.Body))
+			parts = append(parts,
+				text(keyword),
+				closeAfter(p.headerExpression(branch.Condition), ":"),
+				p.suite(branch.Body),
+			)
 		}
 		if node.Else != nil {
 			parts = append(parts, hardLine, text("else:"), p.suite(node.Else))
 		}
 		return concat(parts...)
 	case *ast.WhileStatement:
-		return concat(text("while "), p.expression(node.Condition, 0), text(":"), p.suite(node.Body))
+		return concat(
+			text("while "),
+			closeAfter(p.headerExpression(node.Condition), ":"),
+			p.suite(node.Body),
+		)
 	case *ast.ForStatement:
 		variable := node.Variable
 		if node.Type != "" {
 			variable += ": " + node.Type
 		}
-		return concat(text("for "+variable+" in "), p.expression(node.Iterable, 0), text(":"), p.suite(node.Body))
+		return concat(
+			text("for "+variable+" in "),
+			closeAfter(p.headerExpression(node.Iterable), ":"),
+			p.suite(node.Body),
+		)
 	case *ast.MatchStatement:
-		parts := []doc{text("match "), p.expression(node.Value, 0), text(":")}
+		parts := []doc{text("match "), closeAfter(p.headerExpression(node.Value), ":")}
 		// A comment that ended the "match" line stays on it.
 		for _, comment := range ast.CollectionCommentsAt(node.Comments, 0, true) {
 			parts = append(parts, text("  "+p.commentText(comment)))
@@ -274,6 +286,12 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 	header := concat(parts...)
 	if node.Getter == nil && node.Setter == nil {
 		return header
+	}
+	// The accessor block's colon follows the initializer, so an initializer
+	// ending in a comment is parenthesized to give the colon its own line.
+	if endsWithLineComment(header) && node.Value != nil {
+		parts[len(parts)-1] = parenthesized(p.expression(node.Value, 0))
+		header = concat(parts...)
 	}
 	var accessors []doc
 	// A comment that ended the colon's line stays on it.
@@ -340,15 +358,18 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {
+	// A separating comma, the "when" of a guard and the branch's own colon all
+	// follow a pattern on its line, so a pattern or guard ending in a comment
+	// is parenthesized to keep them off it.
 	patterns := make([]doc, len(matchCase.Patterns))
 	for index, pattern := range matchCase.Patterns {
-		patterns[index] = p.expression(pattern, 0)
+		patterns[index] = p.headerExpression(pattern)
 	}
 	header := join(text(", "), patterns)
 	if matchCase.Guard != nil {
-		header = concat(header, text(" when "), p.expression(matchCase.Guard, 0))
+		header = concat(header, text(" when "), p.headerExpression(matchCase.Guard))
 	}
-	return concat(header, text(":"), p.suite(matchCase.Body))
+	return concat(closeAfter(header, ":"), p.suite(matchCase.Body))
 }
 
 // layout describes how a bracketed construct is broken across lines.
@@ -372,6 +393,17 @@ var (
 	dictionaryLayout = layout{open: "{", close: "}", levels: 1, trailingComma: true, padFlat: true}
 	enumLayout       = layout{open: "{", close: "}", levels: 1, trailingComma: true, padFlat: true}
 )
+
+// holdsAnyLastLine reports whether any item ends in a comment, which holds the
+// rest of its line.
+func holdsAnyLastLine(items []doc) bool {
+	for _, item := range items {
+		if endsWithLineComment(item) {
+			return true
+		}
+	}
+	return false
+}
 
 // collection renders items inside brackets, on one line when they fit and one
 // per line otherwise. Comments written between the brackets are anchored to the
@@ -412,11 +444,18 @@ func (p *printer) collection(shape layout, items []doc, comments []ast.Collectio
 	if shape.padFlat {
 		pad = ifBroken(text(""), text(" "))
 	}
+	// An item ending in a comment cannot share its line with what follows it,
+	// not even the closing bracket, so the construct breaks however short it
+	// is.
+	opening, closing := doc(softLine), doc(softLine)
+	if holdsAnyLastLine(items) {
+		opening, closing = hardLine, hardLine
+	}
 	return group(concat(
 		text(shape.open),
 		pad,
-		nest(shape.levels, concat(softLine, concat(separated...), tail)),
-		softLine,
+		nest(shape.levels, concat(opening, concat(separated...), tail)),
+		closing,
 		pad,
 		text(shape.close),
 	))
@@ -504,7 +543,13 @@ func (p *printer) parameter(parameter ast.Parameter) doc {
 func (p *printer) logicalChain(binary *ast.BinaryExpression, parenthesize bool) doc {
 	body := nest(2, concat(softLine, concat(p.logicalParts(binary)...)))
 	if parenthesize {
+		if endsWithLineComment(body) {
+			return group(concat(text("("), body, hardLine, text(")")))
+		}
 		return group(concat(text("("), body, softLine, text(")")))
+	}
+	if endsWithLineComment(body) {
+		return group(concat(ifBroken(text("("), text("")), body, hardLine, ifBroken(text(")"), text(""))))
 	}
 	return group(concat(
 		ifBroken(text("("), text("")),
@@ -599,9 +644,13 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		return concat(p.expression(node.Callee, 12), p.collection(argumentLayout, arguments, node.Comments))
 	case *ast.MemberExpression:
-		return concat(p.expression(node.Object, 12), text("."+node.Property))
+		return closeAfter(p.expression(node.Object, 12), "."+node.Property)
 	case *ast.SubscriptExpression:
-		return concat(p.expression(node.Object, 12), text("["), p.expression(node.Index, 0), text("]"))
+		return concat(
+			p.expression(node.Object, 12),
+			text("["),
+			closeAfter(p.expression(node.Index, 0), "]"),
+		)
 	case *ast.ArrayLiteral:
 		elements := make([]doc, len(node.Elements))
 		for index, element := range node.Elements {
@@ -615,7 +664,10 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		entries := make([]doc, len(node.Entries))
 		for index, entry := range node.Entries {
-			entries[index] = concat(p.expression(entry.Key, 0), text(separator), p.expression(entry.Value, 0))
+			entries[index] = concat(
+				closeAfter(p.headerExpression(entry.Key), separator),
+				p.expression(entry.Value, 0),
+			)
 		}
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.BindingPattern:
@@ -630,12 +682,19 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 			header = concat(header, text(" -> "+node.ReturnType))
 		}
 		var inner doc
-		if node.Inline {
-			statements := make([]doc, len(node.Body))
-			for index, statement := range node.Body {
+		// A comment ends the line it is written on, so an inline body may hold
+		// one only as its last statement, where it stays at the end of the
+		// line. A body the single-line form cannot hold is written out instead.
+		body, trailing := splitTrailingComment(node.Body)
+		if node.Inline && len(body) > 0 && inlinable(body) {
+			statements := make([]doc, len(body))
+			for index, statement := range body {
 				statements[index] = p.inlineStatement(statement)
 			}
 			inner = concat(header, text(": "), join(text("; "), statements))
+			if trailing != nil {
+				inner = concat(inner, text("  "+p.commentText(trailing)))
+			}
 		} else {
 			inner = concat(header, text(":"), p.suite(node.Body))
 		}
@@ -648,7 +707,35 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 	}
 }
 
-// inlineStatement renders a statement inside a single-line lambda body.
+// splitTrailingComment separates a trailing comment from the statements before
+// it, which is how a comment reaches an inline lambda body.
+func splitTrailingComment(body []ast.Statement) ([]ast.Statement, *ast.Comment) {
+	if len(body) == 0 {
+		return body, nil
+	}
+	comment, ok := body[len(body)-1].(*ast.Comment)
+	if !ok {
+		return body, nil
+	}
+	return body[:len(body)-1], comment
+}
+
+// inlinable reports whether every statement of body can be written on one line.
+func inlinable(body []ast.Statement) bool {
+	for _, statement := range body {
+		switch statement.(type) {
+		case *ast.ExpressionStatement, *ast.Assignment, *ast.ReturnStatement,
+			*ast.KeywordStatement, *ast.VariableDeclaration:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// inlineStatement renders a statement inside a single-line lambda body. Only a
+// statement inlinable reports on reaches it, so the panic marks a tree the
+// formatter does not support rather than input it cannot format.
 func (p *printer) inlineStatement(statement ast.Statement) doc {
 	switch statement.(type) {
 	case *ast.ExpressionStatement, *ast.Assignment, *ast.ReturnStatement,
@@ -659,7 +746,32 @@ func (p *printer) inlineStatement(statement ast.Statement) doc {
 	}
 }
 
-func parenthesized(inner doc) doc { return group(concat(text("("), inner, text(")"))) }
+func parenthesized(inner doc) doc {
+	return group(concat(text("("), closeAfter(inner, ")")))
+}
+
+// headerExpression renders an expression that a mandatory token follows, such
+// as the colon of a statement header or of a dictionary entry. A comment holds
+// the rest of its line, so an expression ending in one is parenthesized, which
+// gives the token a line of its own to land on and keeps the expression
+// readable to the parser as well as to the engine.
+func (p *printer) headerExpression(expr ast.Expression) doc {
+	rendered := p.expression(expr, 0)
+	if endsWithLineComment(rendered) {
+		return parenthesized(rendered)
+	}
+	return rendered
+}
+
+// closeAfter appends a closing token to inner, on the next line when inner ends
+// in a comment. A comment holds the rest of its line, so a token written after
+// one on the same line is commented out.
+func closeAfter(inner doc, closing string) doc {
+	if endsWithLineComment(inner) {
+		return concat(inner, hardLine, text(closing))
+	}
+	return concat(inner, text(closing))
+}
 
 func isLogicalOperator(operator string) bool {
 	switch operator {
