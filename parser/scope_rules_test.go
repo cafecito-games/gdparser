@@ -128,3 +128,33 @@ func TestConstructorRules(t *testing.T) {
 		}
 	}
 }
+
+// "class_name" takes one identifier and "extends" takes a path or a name, which
+// Godot reads with parse_class_name and parse_extends rather than as expressions.
+func TestDirectivesTakeNamesNotExpressions(t *testing.T) {
+	for _, source := range []string{
+		"class_name true\n",
+		"class_name 1\n",
+		"extends true\n",
+		"extends 1\n",
+		"extends Base[int]\n",
+	} {
+		if _, err := parser.Parse("directive.gd", []byte(source)); err == nil {
+			t.Errorf("%q was accepted", source)
+		}
+	}
+	for _, source := range []string{
+		"class_name X\n",
+		"class_name X extends Y\n",
+		"class_name X extends Y.Inner\n",
+		// Godot keeps "match" usable as a name, here as everywhere else.
+		"class_name match\n",
+		"extends Base.Inner\n",
+		"extends \"res://base.gd\"\n",
+		"extends \"res://base.gd\".Inner\n",
+	} {
+		if _, err := parser.Parse("directive.gd", []byte(source)); err != nil {
+			t.Errorf("parse %q: %v", source, err)
+		}
+	}
+}

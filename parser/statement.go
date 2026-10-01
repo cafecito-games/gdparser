@@ -49,17 +49,29 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 	}, nil
 }
 
+// parseDirective parses "class_name" and "extends", which take names rather than
+// expressions. Godot reads the one with parse_class_name, which takes a single
+// identifier, and the other with parse_extends, which takes a path to a script as
+// a string, a dotted name reaching an inner class, or a string followed by one.
 func (p *parser) parseDirective() (ast.Statement, error) {
 	start := p.advance()
-	value, err := p.parseExpression(ast.PrecedenceAssignment)
-	if err != nil {
+	var value ast.Expression
+	var err error
+	if start.Type == token.ClassName {
+		var name token.Token
+		name, err = p.expectIdentifier("expected a class name after class_name")
+		if err != nil {
+			return nil, err
+		}
+		value = &ast.Identifier{Base: base(name.Span), Name: name.Lexeme}
+	} else if value, err = p.parseBaseClassExpression(); err != nil {
 		return nil, err
 	}
 	var extends ast.Expression
 	var extendsSpan token.Span
 	if start.Type == token.ClassName && p.at(token.Extends) {
 		extendsSpan = p.advance().Span
-		extends, err = p.parseExpression(ast.PrecedenceAssignment)
+		extends, err = p.parseBaseClassExpression()
 		if err != nil {
 			return nil, err
 		}
@@ -75,6 +87,42 @@ func (p *parser) parseDirective() (ast.Statement, error) {
 		Base: spanFrom(start.Span.Start, end), Name: start.Lexeme, KeywordSpan: start.Span,
 		Value: value, Extends: extends, ExtendsSpan: extendsSpan,
 	}, nil
+}
+
+// parseBaseClassExpression reads what follows "extends" as an expression, so that
+// the tree keeps the shape it is written in: a string literal for a path, and a
+// name or a dotted chain for a class.
+func (p *parser) parseBaseClassExpression() (ast.Expression, error) {
+	var expr ast.Expression
+	if p.at(token.String) {
+		path := p.advance()
+		expr = stringLiteral(base(path.Span), ast.StringLiteral, "", path.Lexeme)
+		if !p.at(token.Dot) {
+			return expr, nil
+		}
+	}
+	for {
+		if expr != nil {
+			if _, err := p.expect(token.Dot, "expected '.' before an inner class name"); err != nil {
+				return nil, err
+			}
+		}
+		name, err := p.expectIdentifier("expected a base class after extends")
+		if err != nil {
+			return nil, err
+		}
+		if expr == nil {
+			expr = &ast.Identifier{Base: base(name.Span), Name: name.Lexeme}
+		} else {
+			expr = &ast.MemberExpression{
+				Base: spanFrom(expr.Span().Start, name.Span.End), Object: expr,
+				Property: name.Lexeme, PropertySpan: name.Span,
+			}
+		}
+		if !p.at(token.Dot) {
+			return expr, nil
+		}
+	}
 }
 
 func (p *parser) parseVariable() (ast.Statement, error) {
