@@ -96,6 +96,13 @@ type parser struct {
 	// across the return from that block, so they count towards the statement
 	// that follows it.
 	blankLines int
+	// pendingAnnotations holds the annotations read but not yet given to what
+	// they decorate, with pendingBlankLines the blank lines written before the
+	// first of them. Godot keeps one annotation_stack for the whole file, so an
+	// annotation written last in a block waits for the statement after the
+	// block, and one left waiting when the file ends decorates nothing.
+	pendingAnnotations []*ast.Annotation
+	pendingBlankLines  int
 }
 
 // token returns the token at index, recording a lexical error so that the
@@ -208,6 +215,20 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 	// read yet, which is where an annotation of the script itself belongs.
 	scriptHeadOpen := true
 	pendingBlankLines := 0
+	// takeAnnotationsLeftByBlock picks up the annotations a block just read left
+	// waiting, which decorate the statement after that block. They were written
+	// after everything already read here, so they join the end of the list this
+	// one holds.
+	takeAnnotationsLeftByBlock := func() {
+		if len(p.pendingAnnotations) == 0 {
+			return
+		}
+		left, leftBlankLines := p.takePendingAnnotations()
+		if len(pending) == 0 {
+			pendingBlankLines = leftBlankLines
+		}
+		pending = append(pending, left...)
+	}
 	// flush emits annotations that decorate no declaration as plain statements.
 	flush := func() {
 		for index, annotation := range pending {
@@ -223,10 +244,11 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 		for p.match(token.Newline) {
 			blankLines++
 		}
+		takeAnnotationsLeftByBlock()
 		if block && p.at(token.Dedent) {
 			p.advance()
 			p.blankLines = blankLines
-			flush()
+			p.leavePendingAnnotations(pending, pendingBlankLines)
 			return statements, nil
 		}
 		if block && p.inLambda && p.lambdaEnded {
@@ -234,7 +256,7 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			// without the dedent a written line break would have left.
 			p.match(token.Dedent)
 			p.blankLines = blankLines
-			flush()
+			p.leavePendingAnnotations(pending, pendingBlankLines)
 			return statements, nil
 		}
 		if p.at(token.EOF) {
@@ -256,7 +278,7 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			// expression that would not parse.
 			p.lambdaEnded = true
 			p.blankLines = blankLines
-			flush()
+			p.leavePendingAnnotations(pending, pendingBlankLines)
 			return statements, nil
 		}
 		stmt, compound, err := p.parseStatement(classBody)
@@ -384,7 +406,7 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 				// Nothing here could end the statement, so what follows belongs
 				// to the expression the lambda was written in and the body ends.
 				p.lambdaEnded = true
-				flush()
+				p.leavePendingAnnotations(pending, pendingBlankLines)
 				return statements, nil
 			}
 		}
@@ -393,11 +415,66 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			return nil, err
 		}
 	}
-	flush()
 	if block {
 		return nil, p.error(p.peek(), "expected an indented block")
 	}
+	takeAnnotationsLeftByBlock()
+	if len(pending) > 0 && !scriptHeadOpen {
+		// The file ends with an annotation that nothing below it could take.
+		// Godot reports every annotation still on its stack here, which is what
+		// clear_unused_annotations does at the end of parse_program. The ones
+		// left while the head of the script is still open are the exception:
+		// parse_program hands those to the script's own class instead.
+		annotation := pending[0]
+		return nil, p.error(nameToken(annotation.Name, annotation.NameSpan),
+			fmt.Sprintf("the %q annotation decorates nothing", "@"+annotation.Name))
+	}
+	flush()
 	return statements, nil
+}
+
+// takePendingAnnotations returns the annotations a block left waiting, with the
+// blank lines written before the first of them, and clears both.
+func (p *parser) takePendingAnnotations() ([]*ast.Annotation, int) {
+	pending, blankLines := p.pendingAnnotations, p.pendingBlankLines
+	p.pendingAnnotations, p.pendingBlankLines = nil, 0
+	return pending, blankLines
+}
+
+// giveAnnotationsTo binds to statement the annotations written before it and
+// returns the ones that stand in the list ahead of it instead, because the
+// statement is no declaration and so carries none. Godot gives them to any
+// statement; a tree that holds them only on declarations keeps the rest where
+// they were written.
+func (p *parser) giveAnnotationsTo(statement ast.Statement, annotations []*ast.Annotation) ([]ast.Statement, error) {
+	if len(annotations) == 0 {
+		return nil, nil
+	}
+	if err := p.checkAnnotationTargets(statement, annotations); err != nil {
+		return nil, err
+	}
+	if attachAnnotations(statement, annotations) {
+		return nil, nil
+	}
+	leading := make([]ast.Statement, 0, len(annotations))
+	for _, annotation := range annotations {
+		leading = append(leading, annotation)
+	}
+	return leading, nil
+}
+
+// leavePendingAnnotations hands the annotations a block ends with to the list
+// around it, which is the next place a statement they can decorate may be
+// written. Godot keeps one annotation stack for the whole file, so an annotation
+// written last in a suite outlives it.
+func (p *parser) leavePendingAnnotations(pending []*ast.Annotation, blankLines int) {
+	if len(pending) == 0 {
+		return
+	}
+	p.pendingAnnotations = append(p.pendingAnnotations, pending...)
+	if len(p.pendingAnnotations) == len(pending) {
+		p.pendingBlankLines = blankLines
+	}
 }
 
 // attachAnnotations binds annotations to the declaration they decorate and
@@ -600,11 +677,20 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			}
 			return headerComments, static.Span.End, nil
 		}
+		// A block read before this one may have left annotations waiting, and
+		// the first statement of this body is the next one they can decorate.
+		// They are taken before it is read, as Godot's parse_statement pops them
+		// before reading the statement they belong to.
+		left, _ := p.takePendingAnnotations()
 		stmt, _, err := p.parseStatement(classBody)
 		if err != nil {
 			return nil, token.Position{}, err
 		}
-		statements := []ast.Statement{stmt}
+		leading, err := p.giveAnnotationsTo(stmt, left)
+		if err != nil {
+			return nil, token.Position{}, err
+		}
+		statements := append(leading, stmt)
 		if classBody {
 			// A class written on one line holds one member: Godot's
 			// parse_class_body stops after the first when the body is not a
