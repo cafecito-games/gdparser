@@ -316,14 +316,16 @@ func (p *parser) parseArrayOf(start token.Token, parseElement func() (ast.Expres
 }
 
 func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
-	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(0) })
+	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(0) }, true)
 }
 
 // parseDictionaryOf parses a braced entry list, reading each value with
 // parseValue. A match pattern reads its values as patterns; its keys stay
-// expressions, as Godot's dictionary pattern does.
-func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Expression, error)) (ast.Expression, error) {
+// expressions, as Godot's dictionary pattern does, and luaStyle is false there
+// because a pattern is written with colons only.
+func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Expression, error), luaAllowed bool) (ast.Expression, error) {
 	var entries []ast.DictionaryEntry
+	luaStyle := false
 	var comments []ast.CollectionComment
 	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RBrace) {
@@ -332,14 +334,18 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 			if err != nil {
 				return nil, err
 			}
-			if _, err := p.expect(token.Colon, "expected ':' after dictionary key"); err != nil {
+			separator, err := p.dictionarySeparator(key, luaAllowed, len(entries) > 0, luaStyle)
+			if err != nil {
 				return nil, err
 			}
+			luaStyle = separator.Type == token.Assign
 			value, err := parseValue()
 			if err != nil {
 				return nil, err
 			}
-			entries = append(entries, ast.DictionaryEntry{Key: key, Value: value})
+			entries = append(entries, ast.DictionaryEntry{
+				Key: key, Value: value, SeparatorSpan: separator.Span,
+			})
 			p.takeCollectionComments(&comments, len(entries))
 			if !p.match(token.Comma) {
 				break
@@ -356,6 +362,7 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 	}
 	return &ast.DictionaryLiteral{
 		Base: spanFrom(start.Span.Start, end.Span.End), Entries: entries, Comments: comments,
+		LuaStyle: luaStyle && len(entries) > 0,
 	}, nil
 }
 
@@ -453,7 +460,52 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 	case p.at(token.LBracket):
 		return p.parseArrayOf(p.advance(), p.parsePattern)
 	case p.at(token.LBrace):
-		return p.parseDictionaryOf(p.advance(), p.parsePattern)
+		return p.parseDictionaryOf(p.advance(), p.parsePattern, false)
 	}
 	return p.parseExpression(0)
+}
+
+// dictionarySeparator reads the ":" or "=" that follows a dictionary key. A
+// literal is written in one style throughout, so once an entry has been read
+// the separator it used is the only one the rest may use. Every key named with
+// "=" is an identifier or a string, not only the first. A dictionary pattern
+// takes colons only, which is luaAllowed being false.
+func (p *parser) dictionarySeparator(key ast.Expression, luaAllowed, decided, luaStyle bool) (token.Token, error) {
+	if decided && luaStyle {
+		if !p.at(token.Assign) {
+			return token.Token{}, p.error(p.peek(), "expected '=' after dictionary key, since the dictionary is written in the \"{key = value}\" style")
+		}
+		return p.luaDictionarySeparator(key)
+	}
+	if decided {
+		if !p.at(token.Colon) {
+			return token.Token{}, p.error(p.peek(), "expected ':' after dictionary key, since the dictionary is written in the \"{\"key\": value}\" style")
+		}
+		return p.advance(), nil
+	}
+	if luaAllowed && p.at(token.Assign) {
+		return p.luaDictionarySeparator(key)
+	}
+	return p.expect(token.Colon, "expected ':' after dictionary key")
+}
+
+// luaDictionarySeparator reads the "=" of a "{key = value}" entry, which names
+// its key and so requires an identifier or a string.
+func (p *parser) luaDictionarySeparator(key ast.Expression) (token.Token, error) {
+	if !namesADictionaryKey(key) {
+		return token.Token{}, p.error(p.peek(), "expected an identifier or a string before '=' as a dictionary key")
+	}
+	return p.advance(), nil
+}
+
+// namesADictionaryKey reports whether key may be written before "=" in a
+// dictionary, which Godot allows for an identifier and for a string.
+func namesADictionaryKey(key ast.Expression) bool {
+	switch node := key.(type) {
+	case *ast.Identifier:
+		return true
+	case *ast.Literal:
+		return node.Kind == ast.StringLiteral
+	}
+	return false
 }

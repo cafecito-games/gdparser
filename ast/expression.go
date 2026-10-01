@@ -126,12 +126,18 @@ func (*ArrayLiteral) expression() {}
 type DictionaryEntry struct {
 	Key   Expression `json:"key"`
 	Value Expression `json:"value"`
+	// SeparatorSpan covers the ":" or "=" between the key and the value.
+	SeparatorSpan token.Span `json:"separator_span,omitempty"`
 }
 
 // DictionaryLiteral is a dictionary expression.
 type DictionaryLiteral struct {
 	Base
 	Entries []DictionaryEntry `json:"entries"`
+	// LuaStyle reports the "{key = value}" spelling, where an identifier key
+	// stands for the string of the same name. A literal is written in one style
+	// throughout, so the field describes all of its entries.
+	LuaStyle bool `json:"lua_style,omitempty"`
 	// Comments holds the comments written inside the braces.
 	Comments []CollectionComment `json:"comments,omitempty"`
 }
