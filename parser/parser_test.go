@@ -302,6 +302,8 @@ func TestCommentOnALineOfItsOwnDoesNotBreakBlocks(t *testing.T) {
 		{"inside a match case", "func a():\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t# c\n\t\t\tprint()\n"},
 		{"before a later declaration", "func a():\n\tpass\n  # c\nfunc b():\n\tpass\n"},
 		{"inside a nested class", "class C:\n\tfunc a():\n\t\tpass\n\t# c\n\t\tprint()\n"},
+		{"carriage returns", "func a():\r\n\tif true:\r\n\t\tpass\r\n\t# c\r\n\r\n\t\tprint()\r\n"},
+		{"inside a nested lambda body", "var x = [func():\n\t\tvar y = [func():\n\t\t\t\tpass\n\t\t# c\n\t\t]\n]\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.Parse("comment.gd", []byte(test.source))

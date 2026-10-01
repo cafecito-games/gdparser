@@ -270,3 +270,61 @@ func TestLexCommentDoesNotCloseABlockTheCodeBelowReenters(t *testing.T) {
 		}
 	}
 }
+
+// The lookahead skips the rest of the comment line and any blank line between
+// the comment and the code, with either line ending.
+func TestLexCommentLookaheadSkipsBlankCarriageReturnLines(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\r\n\tif true:\r\n\t\tpass\r\n\t# c\r\n\r\n\t\tprint()\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.If, token.True, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline,
+		token.Comment, token.Newline,
+		// The blank line between the comment and the code ends with a newline
+		// of its own, as a blank line does anywhere.
+		token.Newline,
+		token.Identifier, token.LParen, token.RParen, token.Newline,
+		token.Dedent, token.Dedent, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}
+
+func TestLexCommentStaysInsideTheInnerLambdaBody(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var x = [func():\n\t\tvar y = [func():\n\t\t\t\tpass\n\t\t# c\n\t\t]\n]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the comma or bracket that ends a lambda body may leave it, so the
+	// comment below the inner body's level keeps that body open.
+	var kinds []token.Type
+	var firstDedent, comment int
+	for index, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+		if tok.Type == token.Dedent && firstDedent == 0 {
+			firstDedent = index
+		}
+		if tok.Type == token.Comment {
+			comment = index
+		}
+	}
+	if comment == 0 {
+		t.Fatalf("no comment token: %v", kinds)
+	}
+	if firstDedent < comment {
+		t.Fatalf("the inner body closed before its comment: %v", kinds)
+	}
+}
