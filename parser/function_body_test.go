@@ -21,6 +21,9 @@ func TestFunctionBodyHoldsNoClassMembers(t *testing.T) {
 		{"a class_name directive", "func f():\n\tclass_name A\n"},
 		{"inside a nested block", "func f():\n\tif true:\n\t\tsignal s\n"},
 		{"a one-line body", "func f(): static var u = 2\n"},
+		{"a loop body", "func f():\n\tfor i in []:\n\t\tstatic var u = 2\n"},
+		{"a getter's body", "var v:\n\tget:\n\t\tsignal s\n"},
+		{"a setter's body", "var v:\n\tset(value):\n\t\tclass A:\n\t\t\tpass\n"},
 		{"after a semicolon on one line", "func f(): pass; class A: pass\n"},
 		{"inside a one-line static function of a one-line class", "class A: static func f(): static var u = 2\n"},
 		{"inside a match branch", "func f(v):\n\tmatch v:\n\t\t1:\n\t\t\tenum E { X }\n"},
@@ -49,5 +52,27 @@ func TestFunctionBodyHoldsCode(t *testing.T) {
 		if _, err := parser.Parse("body.gd", []byte(source)); err != nil {
 			t.Errorf("parse %q: %v", source, err)
 		}
+	}
+}
+
+// A lambda body ends at the first thing that could not continue it, so one of
+// these keywords closes the body rather than failing inside it. What is left
+// then sits where no statement may begin, or leaves the block it opened
+// unclosed, and Godot rejects the script either way: in a function body its
+// parse_statement reports the keyword, and in a class body the abandoned indent
+// survives as a dedent that reaches the "Expected end of file" check at the end
+// of parse_program.
+func TestClassMemberKeywordEndsALambdaBody(t *testing.T) {
+	for _, test := range []struct{ name, source string }{
+		{"in a class body", "class A:\n\tvar f = func():\n\t\tsignal s\n"},
+		{"in a class body, as a static variable", "class A:\n\tvar f = func():\n\t\tstatic var u = 2\n"},
+		{"in a function body", "func f():\n\tvar x = func():\n\t\tsignal s\n"},
+		{"in a function body, on one line", "func f():\n\tvar x = func(): signal s\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parser.Parse("lambda.gd", []byte(test.source)); err == nil {
+				t.Fatal("expected a parse error")
+			}
+		})
 	}
 }
