@@ -37,6 +37,13 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 		if precedence == ast.PrecedenceNone || precedence < minPrecedence {
 			break
 		}
+		if p.lambdaEnded && !p.multiline() {
+			// A lambda body just ended, and nothing encloses it that spans
+			// lines, so what follows begins the next statement rather than
+			// continuing this expression. Without this an "if" on the line after
+			// a lambda would be read as a conditional.
+			break
+		}
 		start := left.Span().Start
 		if typ == token.If {
 			left, err = p.parseTernary(left, start)
@@ -129,17 +136,21 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 			Base: spanFrom(tok.Span.Start, operand.Span().End), Operator: tok.Lexeme, OperatorSpan: tok.Span, Operand: operand,
 		}, nil
 	case token.LParen:
+		p.pushMultiline(true)
 		expr, err := p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
+		p.popMultiline()
 		if _, err := p.expect(token.RParen, "expected ')' after expression"); err != nil {
 			return nil, err
 		}
 		return expr, nil
 	case token.LBracket:
+		p.pushMultiline(true)
 		return p.parseArray(tok)
 	case token.LBrace:
+		p.pushMultiline(true)
 		return p.parseDictionary(tok)
 	case token.Dollar, token.Percent:
 		return p.parseNodePath(tok)
@@ -196,6 +207,7 @@ func (p *parser) parsePreload(keyword token.Token) (ast.Expression, error) {
 		return nil, p.error(p.peek(), "expected '(' after preload")
 	}
 	p.advance()
+	p.pushMultiline(true)
 	callee := ast.Expression(&ast.Identifier{Base: base(keyword.Span), Name: keyword.Lexeme})
 	arguments, comments, end, err := p.parseArguments()
 	if err != nil {
@@ -214,6 +226,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 	for {
 		switch {
 		case p.match(token.LParen):
+			p.pushMultiline(true)
 			arguments, comments, end, err := p.parseArguments()
 			if err != nil {
 				return nil, err
@@ -232,10 +245,12 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 				Property: property.Lexeme, PropertySpan: property.Span,
 			}
 		case p.match(token.LBracket):
+			p.pushMultiline(true)
 			index, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
+			p.popMultiline()
 			end, err := p.expect(token.RBracket, "expected ']' after subscript")
 			if err != nil {
 				return nil, err
@@ -270,6 +285,7 @@ func (p *parser) parseArguments() ([]ast.Expression, []ast.CollectionComment, to
 			}
 		}
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RParen, "expected ')' after arguments")
 	if err != nil {
 		return nil, nil, token.Token{}, err
@@ -278,6 +294,15 @@ func (p *parser) parseArguments() ([]ast.Expression, []ast.CollectionComment, to
 }
 
 func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
+	// A line break inside a lambda body carries meaning even when the lambda is
+	// written inside brackets, where one otherwise would not. Godot resets the
+	// mode for the body and sets the indentation built up so far aside, so the
+	// body may open a block of its own and the enclosing lines keep theirs.
+	multilineContext := p.multiline()
+	p.pushMultiline(false)
+	if multilineContext {
+		p.scanner.PushExpressionIndentedBlock()
+	}
 	// A lambda may carry a name, which Godot reports in a stack trace instead
 	// of the anonymous placeholder.
 	name := ""
@@ -306,10 +331,26 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		}
 	}
 	inline := p.peekN(1).Type != token.Newline && p.peekN(1).Type != token.Comment
-	body, end, err := p.parseSuite()
+	previousInLambda := p.inLambda
+	p.inLambda = true
+	// A body about to be read has not ended, whatever an earlier lambda in the
+	// same statement left behind. Godot reads a body's first statement before it
+	// looks at the marker at all, which comes to the same thing.
+	p.lambdaEnded = false
+	body, end, err := p.parseSuiteFor(true)
+	p.inLambda = previousInLambda
 	if err != nil {
 		return nil, err
 	}
+	p.popMultiline()
+	if multilineContext {
+		p.scanner.PopExpressionIndentedBlock()
+	}
+	// The body is over, whether it ended at a dedent or at the first thing that
+	// could not continue it. Either way the statement holding the lambda may end
+	// here, which is what lambdaEnded carries. It is marked after the body's own
+	// multiline frame is popped, since popping one forgets such a mark.
+	p.lambdaEnded = true
 	return &ast.LambdaExpression{
 		Base: spanFrom(start.Span.Start, end), Name: name, NameSpan: nameSpan,
 		Parameters: parameters, ReturnType: returnType,
@@ -382,6 +423,7 @@ func (p *parser) parseArrayOf(start token.Token, parseElement func() (ast.Expres
 			}
 		}
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RBracket, "expected ']' after array")
 	if err != nil {
 		return nil, err
@@ -432,6 +474,7 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 			}
 		}
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RBrace, "expected '}' after dictionary")
 	if err != nil {
 		return nil, err
@@ -556,9 +599,13 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 		keyword := p.advance()
 		return &ast.RestPattern{Base: base(keyword.Span)}, nil
 	case p.at(token.LBracket):
-		return p.parseArrayPattern(p.advance())
+		opener := p.advance()
+		p.pushMultiline(true)
+		return p.parseArrayPattern(opener)
 	case p.at(token.LBrace):
-		return p.parseDictionaryPattern(p.advance())
+		opener := p.advance()
+		p.pushMultiline(true)
+		return p.parseDictionaryPattern(opener)
 	}
 	return p.parseExpression(ast.PrecedenceAssignment)
 }
@@ -630,6 +677,7 @@ func (p *parser) parseDictionaryPattern(start token.Token) (ast.Expression, erro
 		}
 		p.takeCollectionComments(&comments, len(entries))
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RBrace, "expected '}' after dictionary pattern")
 	if err != nil {
 		return nil, err

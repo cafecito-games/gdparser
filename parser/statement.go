@@ -17,6 +17,7 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 	var comments []ast.CollectionComment
 	end := name.Span.End
 	if p.match(token.LParen) {
+		p.pushMultiline(true)
 		p.takeCollectionComments(&comments, 0)
 		if !p.at(token.RParen) {
 			for {
@@ -35,6 +36,7 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 				}
 			}
 		}
+		p.popMultiline()
 		closing, err := p.expect(token.RParen, "expected ')' after annotation")
 		if err != nil {
 			return nil, err
@@ -397,6 +399,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 	if _, err := p.expect(token.LParen, "expected '('"); err != nil {
 		return nil, nil, err
 	}
+	p.pushMultiline(true)
 	var parameters []ast.Parameter
 	var comments []ast.CollectionComment
 	p.takeCollectionComments(&comments, 0)
@@ -473,6 +476,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 			}
 		}
 	}
+	p.popMultiline()
 	if _, err := p.expect(token.RParen, "expected ')' after parameters"); err != nil {
 		return nil, nil, err
 	}
@@ -539,6 +543,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 	if _, err := p.expect(token.LBrace, "expected '{' in enum declaration"); err != nil {
 		return nil, err
 	}
+	p.pushMultiline(true)
 	var members []ast.EnumMember
 	var comments []ast.CollectionComment
 	for !p.at(token.RBrace) {
@@ -572,6 +577,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 			break
 		}
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RBrace, "expected '}' after enum")
 	if err != nil {
 		return nil, err
@@ -805,6 +811,7 @@ func (p *parser) parseAssert() (ast.Statement, error) {
 		return nil, p.error(p.peek(), "expected '(' after assert")
 	}
 	p.advance()
+	p.pushMultiline(true)
 	arguments, comments, end, err := p.parseArguments()
 	if err != nil {
 		return nil, err

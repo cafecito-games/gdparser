@@ -26,33 +26,100 @@ func (e *Error) Error() string {
 
 // Parse parses one GDScript source file.
 func Parse(filename string, source []byte) (*ast.File, error) {
-	tokens, err := lexer.Lex(source)
+	p := &parser{filename: filename, scanner: lexer.NewScanner(source)}
+	// Line breaks carry meaning at the top level, which is the one frame Godot
+	// keeps on its multiline stack for the whole parse.
+	p.pushMultiline(false)
+	first, err := p.token(0)
 	if err != nil {
-		if filename != "" {
-			return nil, fmt.Errorf("%s:%w", filename, err)
-		}
-		return nil, err
+		return nil, p.wrap(err)
 	}
-	p := &parser{filename: filename, tokens: tokens}
 	statements, err := p.parseStatements(false)
 	if err != nil {
 		return nil, err
 	}
-	file := &ast.File{Name: filename, Statements: statements}
-	if len(tokens) > 0 {
-		file.SourceSpan = token.Span{Start: tokens[0].Span.Start, End: tokens[len(tokens)-1].Span.End}
+	if p.scanErr != nil {
+		// A statement list ends at the end of the tokens, which is where a
+		// lexical error leaves the scan, so the error is reported here rather
+		// than read as the end of the file.
+		return nil, p.wrap(p.scanErr)
 	}
+	file := &ast.File{Name: filename, Statements: statements}
+	file.SourceSpan = token.Span{Start: first.Span.Start, End: p.peek().Span.End}
 	return file, nil
 }
 
 type parser struct {
 	filename string
-	tokens   []token.Token
+	scanner  *lexer.Scanner
 	current  int
+	// scanErr holds a lexical error found while looking at a token, so that the
+	// peeking helpers can stay free of error returns.
+	scanErr error
+	// multilineStack records, innermost last, whether a line break carries
+	// meaning in the construct being parsed. Godot keeps the same stack, and the
+	// tokenizer follows its top.
+	multilineStack []bool
+	// inLambda reports that the statement being read belongs to a lambda body,
+	// where anything that is not a line break may end the body instead.
+	inLambda bool
+	// lambdaEnded records that a lambda body has just ended. The end of a body
+	// is not a token, so it is carried here and spent where a line break would
+	// otherwise be required.
+	lambdaEnded bool
 	// blankLines carries the blank lines found at the end of a nested block
 	// across the return from that block, so they count towards the statement
 	// that follows it.
 	blankLines int
+}
+
+// token returns the token at index, recording a lexical error so that the
+// peeking helpers need not report one.
+func (p *parser) token(index int) (token.Token, error) {
+	tok, err := p.scanner.At(index)
+	if err != nil {
+		if p.scanErr == nil {
+			p.scanErr = err
+		}
+		return token.Token{Type: token.EOF}, err
+	}
+	return tok, nil
+}
+
+// wrap gives a lexical error the filename its position is relative to.
+func (p *parser) wrap(err error) error {
+	if p.filename == "" {
+		return err
+	}
+	return fmt.Errorf("%s:%w", p.filename, err)
+}
+
+// pushMultiline says whether a line break carries meaning in the construct about
+// to be parsed, and tells the scanner. Godot's push_multiline does the same.
+func (p *parser) pushMultiline(multiline bool) {
+	p.multilineStack = append(p.multilineStack, multiline)
+	p.scanner.SetMultilineMode(p.current, multiline)
+}
+
+// popMultiline returns to the enclosing construct's answer. A lambda body that
+// ended inside the construct being closed is forgotten with it: the end of a body
+// may stand in for the end of the statement holding it, but only while the
+// expression has not moved on, and a closing bracket moves it on. Godot 4.6.3
+// carries the mark past the bracket, which stops it from reading the "or" in
+// "a.any(func(): return x) or b", source the engine does accept.
+func (p *parser) popMultiline() {
+	p.multilineStack = p.multilineStack[:len(p.multilineStack)-1]
+	p.lambdaEnded = false
+	p.scanner.SetMultilineMode(p.current, p.multiline())
+}
+
+// multiline reports whether a line break currently carries no meaning, which is
+// to say that the parser is inside a bracketed construct.
+func (p *parser) multiline() bool {
+	if len(p.multilineStack) == 0 {
+		return false
+	}
+	return p.multilineStack[len(p.multilineStack)-1]
 }
 
 // dropBlankLines discards the blank lines left over by a nested block. A
@@ -61,6 +128,22 @@ type parser struct {
 // that line rather than the first statement of the block it opens.
 func (p *parser) dropBlankLines() { p.blankLines = 0 }
 
+// spendLambdaEnd settles a lambda that ended inside the compound statement just
+// read. Godot requires nothing after such a statement, so this only spends a
+// mark already left: when the statement's line ends, or its block does, the
+// statement ended there and the mark goes with it. A mark still standing where
+// something else follows belongs to a lambda body that ended deeper in, so it is
+// left for the list holding that body to find. Nothing is marked here, because a
+// compound statement needs no end of its own.
+func (p *parser) spendLambdaEnd() {
+	if !p.lambdaEnded {
+		return
+	}
+	if !p.inLambda || p.at(token.Newline, token.Semicolon, token.EOF, token.Dedent) {
+		p.lambdaEnded = false
+	}
+}
+
 // takeBlankLines returns and clears the blank lines left over by a nested block.
 func (p *parser) takeBlankLines() int {
 	count := p.blankLines
@@ -68,6 +151,11 @@ func (p *parser) takeBlankLines() int {
 	return count
 }
 
+// parseStatements reads a list of statements. block says the list is an indented
+// block, which ends at its dedent. A list read anywhere inside a lambda body may
+// also end at the first thing that could not continue it, because what follows
+// belongs to the expression the lambda was written in; the body and every block
+// nested in it then close together.
 func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 	var statements []ast.Statement
 	var pending []*ast.Annotation
@@ -93,6 +181,14 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 			flush()
 			return statements, nil
 		}
+		if block && p.inLambda && p.lambdaEnded {
+			// A block inside a lambda body ends with the body, so it may close
+			// without the dedent a written line break would have left.
+			p.match(token.Dedent)
+			p.blankLines = blankLines
+			flush()
+			return statements, nil
+		}
 		if p.at(token.EOF) {
 			break
 		}
@@ -100,6 +196,16 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 			return nil, p.error(p.peek(), "unexpected dedent")
 		}
 
+		if p.inLambda && !beginsStatement(p.peek().Type) {
+			// Inside a lambda body, source that could not begin a statement is
+			// the rest of the expression the lambda was written in, so the body
+			// ends here rather than failing. Godot ends it the same way, on an
+			// expression that would not parse.
+			p.lambdaEnded = true
+			p.blankLines = blankLines
+			flush()
+			return statements, nil
+		}
 		stmt, compound, err := p.parseStatement()
 		if err != nil {
 			return nil, err
@@ -135,12 +241,15 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 		}
 		statements = append(statements, stmt)
 		if compound {
+			// A compound statement read its own block, so no line break is
+			// required after it.
+			p.spendLambdaEnd()
 			continue
 		}
 		if p.match(token.Semicolon) {
 			continue
 		}
-		if p.at(token.Comment) {
+		if p.at(token.Comment) && p.endsLineOf(stmt) {
 			comment := commentNode(p.advance())
 			if trivia := ast.TriviaOf(stmt); trivia != nil {
 				trivia.TrailingComment = comment
@@ -148,6 +257,23 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 				statements = append(statements, comment)
 			}
 		}
+		if !p.at(token.Newline) {
+			if p.lambdaEnded {
+				// A lambda inside this statement ended without a line break of
+				// its own, and that end stands in for the one the statement
+				// needs.
+				p.lambdaEnded = false
+				continue
+			}
+			if p.inLambda {
+				// Nothing here could end the statement, so what follows belongs
+				// to the expression the lambda was written in and the body ends.
+				p.lambdaEnded = true
+				flush()
+				return statements, nil
+			}
+		}
+		p.lambdaEnded = false
 		if _, err := p.expect(token.Newline, "expected end of line"); err != nil {
 			return nil, err
 		}
@@ -191,9 +317,9 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		return stmt, false, err
 	case token.Var, token.Const:
 		stmt, err := p.parseVariable()
-		compound := statementHasBlockLambda(stmt)
+		compound := false
 		if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
-			compound = compound || declaration.AccessorBlock
+			compound = declaration.AccessorBlock
 		}
 		return stmt, compound, err
 	case token.Static:
@@ -206,9 +332,9 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		if p.at(token.Var) {
 			keyword := p.advance()
 			stmt, err := p.parseVariableAfter(keyword, static, false)
-			compound := statementHasBlockLambda(stmt)
+			compound := false
 			if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
-				compound = compound || declaration.AccessorBlock
+				compound = declaration.AccessorBlock
 			}
 			return stmt, compound, err
 		}
@@ -240,7 +366,7 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		return stmt, true, err
 	case token.Return:
 		stmt, err := p.parseReturn()
-		return stmt, statementHasBlockLambda(stmt), err
+		return stmt, false, err
 	case token.Assert:
 		stmt, err := p.parseAssert()
 		return stmt, false, err
@@ -249,11 +375,18 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
 	default:
 		stmt, err := p.parseExpressionStatement()
-		return stmt, statementHasBlockLambda(stmt), err
+		return stmt, false, err
 	}
 }
 
 func (p *parser) parseSuite() ([]ast.Statement, token.Position, error) {
+	return p.parseSuiteFor(false)
+}
+
+// parseSuiteFor parses the block a colon opens. forLambda marks a lambda body,
+// which ends at the first thing that could not continue it rather than only at a
+// dedent, because the expression the lambda sits in picks up from there.
+func (p *parser) parseSuiteFor(forLambda bool) ([]ast.Statement, token.Position, error) {
 	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
 		return nil, token.Position{}, err
 	}
@@ -283,6 +416,9 @@ func (p *parser) parseSuite() ([]ast.Statement, token.Position, error) {
 		}
 		if p.at(token.Comment) {
 			body = append(body, commentNode(p.advance()))
+		}
+		if p.inLambda && !p.at(token.Newline, token.Semicolon, token.EOF, token.Dedent) {
+			p.lambdaEnded = true
 		}
 		end := stmt.Span().End
 		if len(body) > 0 {
@@ -346,46 +482,31 @@ func (p *parser) expect(typ token.Type, message string) (token.Token, error) {
 
 func (p *parser) advance() token.Token {
 	tok := p.peek()
-	if p.current < len(p.tokens) {
+	if tok.Type != token.EOF {
 		p.current++
 	}
 	return tok
 }
 
-func (p *parser) peek() token.Token {
-	if p.current >= len(p.tokens) {
-		return p.tokens[len(p.tokens)-1]
-	}
-	return p.tokens[p.current]
-}
+func (p *parser) peek() token.Token { return p.peekN(0) }
 
 func (p *parser) peekN(n int) token.Token {
-	index := p.current + n
-	if index >= len(p.tokens) {
-		return p.tokens[len(p.tokens)-1]
-	}
-	return p.tokens[index]
+	tok, _ := p.token(p.current + n)
+	return tok
 }
 
-func (p *parser) previous() token.Token { return p.tokens[p.current-1] }
+func (p *parser) previous() token.Token {
+	tok, _ := p.token(p.current - 1)
+	return tok
+}
 
 func (p *parser) error(tok token.Token, message string) error {
-	return &Error{Filename: p.filename, Token: tok, Message: message}
-}
-
-func statementHasBlockLambda(statement ast.Statement) bool {
-	if statement == nil {
-		return false
+	if p.scanErr != nil {
+		// A token that could not be read is reported as itself rather than as
+		// whatever the grammar expected in its place.
+		return p.wrap(p.scanErr)
 	}
-	found := false
-	ast.Inspect(statement, func(node ast.Node) bool {
-		if lambda, ok := node.(*ast.LambdaExpression); ok && !lambda.Inline {
-			found = true
-			return false
-		}
-		return !found
-	})
-	return found
+	return &Error{Filename: p.filename, Token: tok, Message: message}
 }
 
 // expectIdentifier consumes a token that may stand where GDScript expects an
@@ -424,6 +545,37 @@ func isWord(typ token.Type) bool {
 	return typ == token.Identifier || typ == token.Underscore || token.IsKeyword(typ)
 }
 
+// beginsStatement reports whether typ could open a statement, which is to say
+// that it opens one of the statement forms or that it opens an expression. It is
+// what tells a lambda body that it has ended: Godot reaches the same conclusion
+// by finding that the expression it tried to read was not there.
+func beginsStatement(typ token.Type) bool {
+	switch typ {
+	case token.At, token.Extends, token.ClassName, token.Var, token.Const,
+		token.Static, token.Func, token.Class, token.Signal, token.Enum,
+		token.If, token.While, token.For, token.Match, token.Return,
+		token.Pass, token.Break, token.Continue, token.Breakpoint,
+		token.Assert, token.Comment:
+		return true
+	}
+	return beginsExpression(typ)
+}
+
+// beginsExpression reports whether typ has a prefix rule, which is how Godot
+// decides whether an expression starts here.
+func beginsExpression(typ token.Type) bool {
+	switch typ {
+	case token.Identifier, token.Integer, token.Float, token.String,
+		token.True, token.False, token.Null, token.Ampersand, token.Caret,
+		token.Minus, token.Plus, token.Not, token.Bang, token.Tilde,
+		token.Await, token.LParen, token.LBracket, token.LBrace,
+		token.Dollar, token.Percent, token.Func, token.Self, token.Super,
+		token.Preload:
+		return true
+	}
+	return token.IsIdentifier(typ)
+}
+
 func base(span token.Span) ast.Base { return ast.Base{SourceSpan: span} }
 
 func spanFrom(start token.Position, end token.Position) ast.Base {
@@ -442,6 +594,19 @@ func (p *parser) takeCollectionComments(comments *[]ast.CollectionComment, index
 			Comment: commentNode(p.advance()), Index: index, Trailing: trailing,
 		})
 	}
+}
+
+// endsLineOf reports whether the comment the parser is sitting on ends the
+// source line that statement ends on, which is what makes it that statement's
+// trailing comment rather than a comment of its own. A block that closed before
+// the comment leaves a dedent in between, which carries no text and so stands on
+// no line.
+func (p *parser) endsLineOf(statement ast.Statement) bool {
+	previous := p.previous()
+	if endsLine(previous.Type) {
+		return false
+	}
+	return previous.Span.End.Line == p.peek().Span.Start.Line
 }
 
 // endsLine reports whether typ is a token that carries no text of its own and

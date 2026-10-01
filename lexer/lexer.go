@@ -4,7 +4,6 @@ package lexer
 import (
 	"bytes"
 	"fmt"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -22,25 +21,104 @@ func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Position, e.Mess
 // byteOrderMark is the UTF-8 encoding of U+FEFF.
 var byteOrderMark = []byte{0xef, 0xbb, 0xbf}
 
-// Lex returns all tokens in source. Indentation is emitted as INDENT and DEDENT.
+// Lex returns all tokens in source, with indentation emitted as INDENT and
+// DEDENT. Nothing drives the scan, so a line break is taken to carry no meaning
+// wherever a bracket is open, which is what Godot's parser asks for everywhere
+// except inside a lambda body and a type argument list. Use a Scanner, as the
+// parser does, where those matter.
 func Lex(source []byte) ([]token.Token, error) {
-	l := &lexer{
-		source:  source,
-		line:    1,
-		column:  1,
-		atStart: true,
-		indents: []int{0},
+	l := newLexer(source)
+	l.tracksBrackets = true
+	var tokens []token.Token
+	for !l.finished {
+		tok, err := l.next()
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, tok)
 	}
-	// A UTF-8 byte order mark carries no syntax. Godot's style guide asks for
-	// files without one, so it is skipped rather than rejected, which lets a
-	// formatter rewrite such a file cleanly.
-	if bytes.HasPrefix(source, byteOrderMark) {
-		l.offset = len(byteOrderMark)
+	return tokens, nil
+}
+
+type Scanner struct {
+	lex *lexer
+	// tokens holds every token handed out so far, so the parser may look back
+	// and ahead by index.
+	tokens []token.Token
+	err    error
+}
+
+// NewScanner returns a Scanner reading source. Line breaks are significant until
+// the caller says otherwise, which is the state Godot's parser starts in.
+func NewScanner(source []byte) *Scanner {
+	return &Scanner{lex: newLexer(source)}
+}
+
+// At returns the token at index, reading more source when it has to. Asking past
+// the end of the source returns its EOF token, so a caller may look ahead
+// without bounds checking.
+func (s *Scanner) At(index int) (token.Token, error) {
+	for len(s.tokens) <= index && s.err == nil && !s.lex.finished {
+		tok, err := s.lex.next()
+		if err != nil {
+			s.err = err
+			break
+		}
+		s.tokens = append(s.tokens, tok)
 	}
-	if err := l.run(); err != nil {
-		return nil, err
+	if index < len(s.tokens) {
+		return s.tokens[index], nil
 	}
-	return l.tokens, nil
+	if s.err != nil {
+		return token.Token{}, s.err
+	}
+	return s.tokens[len(s.tokens)-1], nil
+}
+
+// SetMultilineMode says whether a line break between the tokens still to be read
+// carries meaning. Turning line breaks off also drains the ones already read at
+// index, because the construct they would have ended is one the caller has just
+// decided may span lines.
+func (s *Scanner) SetMultilineMode(index int, multiline bool) {
+	s.lex.multiline = multiline
+	if multiline {
+		s.DropLayout(index)
+	}
+}
+
+// DropLayout discards the run of line break and indentation tokens read at index,
+// which say nothing a construct spanning lines can use.
+func (s *Scanner) DropLayout(index int) {
+	end := index
+	for end < len(s.tokens) && isLayout(s.tokens[end].Type) {
+		end++
+	}
+	if end > index {
+		s.tokens = append(s.tokens[:index], s.tokens[end:]...)
+	}
+}
+
+// isLayout reports whether typ describes the shape of the source rather than
+// anything written in it.
+func isLayout(typ token.Type) bool {
+	return typ == token.Newline || typ == token.Indent || typ == token.Dedent
+}
+
+// PushExpressionIndentedBlock sets aside the indentation built up so far, so that
+// a block written inside an expression, which is to say a lambda body, may start
+// its own.
+func (s *Scanner) PushExpressionIndentedBlock() {
+	s.lex.blocks = append(s.lex.blocks, s.lex.indents)
+}
+
+// PopExpressionIndentedBlock restores the indentation that the matching
+// PushExpressionIndentedBlock set aside.
+func (s *Scanner) PopExpressionIndentedBlock() {
+	if len(s.lex.blocks) == 0 {
+		return
+	}
+	s.lex.indents = s.lex.blocks[len(s.lex.blocks)-1]
+	s.lex.blocks = s.lex.blocks[:len(s.lex.blocks)-1]
 }
 
 type lexer struct {
@@ -49,20 +127,28 @@ type lexer struct {
 	line    int
 	column  int
 	atStart bool
-	depth   int
-	layouts []lambdaLayout
-	// lambdaHeaderDepth is the bracket depth of a lambda header being scanned,
-	// or zero when none is pending. A lambda header is only tracked inside
-	// brackets, so a real pending header always sits at a depth above zero.
-	lambdaHeaderDepth int
-	// lineIndent is the indentation width of the logical line being scanned.
-	// A continuation keeps the width of the line it started on.
-	lineIndent int
-	// matches holds the match statements open inside a lambda body, innermost
-	// last, so a comma can be recognized as a pattern separator.
-	matches []matchBlock
-	indents []int
-	tokens  []token.Token
+	// multiline says that a line break between tokens carries no meaning, so no
+	// NEWLINE, INDENT or DEDENT is produced while it holds. The parser sets it;
+	// Lex derives it from depth instead.
+	multiline bool
+	// tracksBrackets makes the lexer set multiline from the bracket depth on its
+	// own, which is what Lex does in the absence of a parser.
+	tracksBrackets bool
+	depth          int
+	indents        []int
+	// blocks holds the indentation stacks set aside for the lambda bodies that
+	// are open, innermost last.
+	blocks [][]int
+	// pending holds tokens produced but not yet handed out, such as the rest of
+	// a run of dedents.
+	pending []token.Token
+	// lastType is the type of the token produced most recently, which is what
+	// says whether the source already ended with a line break.
+	lastType token.Type
+	// ended records that the tokens closing the source have been produced, and
+	// finished that its EOF has been handed out.
+	ended    bool
+	finished bool
 	// codeLineIndent, codeLineStart and codeLineFound cache the lookahead that
 	// nextCodeIndent performs. The cache holds while the scan stays before
 	// codeLineStart, which is the end of source when no code line follows.
@@ -71,152 +157,113 @@ type lexer struct {
 	codeLineFound  bool
 }
 
-// lambdaLayout records one multiline lambda body that is still open. Lambdas
-// nest, so each body keeps its own state: the bracket depth its header closed
-// at, and the height of the indentation stack outside the body.
-type lambdaLayout struct {
-	depth       int
-	indentDepth int
+func newLexer(source []byte) *lexer {
+	l := &lexer{source: source, line: 1, column: 1, atStart: true, indents: []int{0}}
+	// A UTF-8 byte order mark carries no syntax. Godot's style guide asks for
+	// files without one, so it is skipped rather than rejected, which lets a
+	// formatter rewrite such a file cleanly.
+	if bytes.HasPrefix(source, byteOrderMark) {
+		l.offset = len(byteOrderMark)
+	}
+	return l
 }
 
-// matchBlock records one match statement open inside a multiline lambda body.
-// A branch's patterns are comma separated, so a comma on a branch's header line
-// separates patterns instead of ending the body.
-type matchBlock struct {
-	// indent is the indentation width of the line holding the match keyword.
-	indent int
-	// branchIndent is the indentation width of the branch header lines, or
-	// noBranchIndent until the first branch establishes it.
-	branchIndent int
-	// layout is the number of open lambda bodies when the match was opened, so
-	// the block is discarded with the body that holds it.
-	layout int
+// setIndents replaces the indentation stack without writing through a slice an
+// earlier state still refers to.
+func (l *lexer) setIndents(indents []int) {
+	l.indents = append([]int(nil), indents...)
 }
 
-// noBranchIndent marks a match block whose branch indentation is not yet known.
-// Indentation is never negative, so no real width collides with it.
-const noBranchIndent = -1
-
-// onMatchBranchHeader reports whether the scan sits on the header line of a
-// match branch belonging to the innermost open lambda body, where a comma
-// separates the branch's patterns.
-func (l *lexer) onMatchBranchHeader() bool {
-	if len(l.matches) == 0 {
-		return false
-	}
-	block := l.matches[len(l.matches)-1]
-	return block.layout == len(l.layouts) && block.branchIndent == l.lineIndent
+func (l *lexer) pushIndent(columns int) {
+	l.setIndents(append(l.indents, columns))
 }
 
-// startsStatement reports whether the token just emitted opened a statement.
-// Godot accepts match as a name, so the keyword also appears as a member or a
-// declared identifier, where it opens no block.
-func (l *lexer) startsStatement() bool {
-	if len(l.tokens) < 2 {
-		return true
-	}
-	switch l.tokens[len(l.tokens)-2].Type {
-	case token.Newline, token.Indent, token.Dedent, token.Semicolon, token.Colon:
-		return true
-	}
-	return false
+func (l *lexer) popIndent() {
+	l.setIndents(l.indents[:len(l.indents)-1])
 }
 
-// openMatchBlock records a match statement that begins inside a lambda body.
-func (l *lexer) openMatchBlock() {
-	l.matches = append(l.matches, matchBlock{
-		indent:       l.lineIndent,
-		branchIndent: noBranchIndent,
-		layout:       len(l.layouts),
-	})
-}
-
-// trackMatchIndent updates the open match blocks for a line of code indented to
-// columns: a line at or outside a match's own indentation has left it, and the
-// first line inside one establishes where its branch headers sit.
-func (l *lexer) trackMatchIndent(columns int) {
-	for len(l.matches) > 0 && columns <= l.matches[len(l.matches)-1].indent {
-		l.matches = l.matches[:len(l.matches)-1]
-	}
-	if len(l.matches) == 0 {
-		return
-	}
-	block := &l.matches[len(l.matches)-1]
-	if block.branchIndent == noBranchIndent {
-		block.branchIndent = columns
-	}
-}
-
-// layoutDepth returns the bracket depth of the innermost open lambda body, or
-// zero when no body is open.
-func (l *lexer) layoutDepth() int {
-	if len(l.layouts) == 0 {
-		return 0
-	}
-	return l.layouts[len(l.layouts)-1].depth
-}
-
-func (l *lexer) run() error {
-	for !l.done() {
-		if l.atStart && l.depth == l.layoutDepth() {
-			if err := l.scanIndent(); err != nil {
-				return err
-			}
-			if l.done() {
-				break
-			}
+// next returns the next token, reading source until one is produced.
+func (l *lexer) next() (token.Token, error) {
+	for len(l.pending) == 0 {
+		if err := l.step(); err != nil {
+			return token.Token{}, err
 		}
+	}
+	tok := l.pending[0]
+	l.pending = l.pending[1:]
+	if tok.Type == token.EOF {
+		l.finished = true
+	}
+	return tok, nil
+}
 
-		start := l.position()
-		c := l.peek()
-		switch {
-		case c == ' ' || c == '\t' || c == '\r':
-			l.advance()
-		case c == '\n':
-			l.advance()
-			if l.depth == l.layoutDepth() {
-				l.emit(token.Newline, "", start)
+// step reads the next piece of source, queueing whatever tokens it produces. It
+// queues nothing when the source only held whitespace, so next calls it again.
+func (l *lexer) step() error {
+	if l.done() {
+		if !l.ended {
+			l.ended = true
+			position := l.position()
+			if l.lastType != token.Newline {
+				l.emit(token.Newline, "", position)
 			}
-			l.atStart = true
-		case c == '\\' && l.peekN(1) == '\n':
-			l.scanContinuation()
-		case c == '#':
-			l.scanComment(start)
-		case c == 'r' && (l.peekN(1) == '"' || l.peekN(1) == '\''):
-			// A raw string literal, r"...", where backslashes are literal.
-			l.advance()
-			if err := l.scanString(start); err != nil {
-				return err
+			for len(l.indents) > 1 {
+				l.popIndent()
+				l.emit(token.Dedent, "", position)
 			}
-		case isIdentifierStart(c):
-			l.scanIdentifier(start)
-		case isDigit(c):
-			l.scanNumber(start)
-		case c == '.' && isDigit(l.peekN(1)):
-			// A float with its leading zero omitted, as in .5.
-			l.scanNumber(start)
-		case c == '\'' || c == '"':
-			if err := l.scanString(start); err != nil {
-				return err
-			}
-		default:
-			if err := l.scanOperator(start); err != nil {
-				return err
-			}
+			l.emit(token.EOF, "", position)
+		}
+		return nil
+	}
+	if l.atStart && !l.multiline {
+		// Indentation is measured before the line's first token, and the two are
+		// read in one step so that a blank or comment-only line cannot leave the
+		// scan where it started.
+		if err := l.scanIndent(); err != nil {
+			return err
+		}
+		if l.done() {
+			return nil
 		}
 	}
 
-	if len(l.tokens) == 0 || l.tokens[len(l.tokens)-1].Type != token.Newline {
-		p := l.position()
-		l.emit(token.Newline, "", p)
+	start := l.position()
+	c := l.peek()
+	switch {
+	case c == ' ' || c == '\t' || c == '\r':
+		l.advance()
+	case c == '\n':
+		l.advance()
+		if !l.multiline {
+			l.emit(token.Newline, "", start)
+		}
+		l.atStart = true
+	case c == '\\' && l.peekN(1) == '\n':
+		l.scanContinuation()
+	case c == '#':
+		l.scanComment(start)
+	case c == 'r' && (l.peekN(1) == '"' || l.peekN(1) == '\''):
+		// A raw string literal, r"...", where backslashes are literal.
+		l.advance()
+		if err := l.scanString(start); err != nil {
+			return err
+		}
+	case isIdentifierStart(c):
+		l.scanIdentifier(start)
+	case isDigit(c):
+		l.scanNumber(start)
+	case c == '.' && isDigit(l.peekN(1)):
+		// A float with its leading zero omitted, as in .5.
+		l.scanNumber(start)
+	case c == '\'' || c == '"':
+		if err := l.scanString(start); err != nil {
+			return err
+		}
+	default:
+		if err := l.scanOperator(start); err != nil {
+			return err
+		}
 	}
-	for len(l.indents) > 1 {
-		l.indents = l.indents[:len(l.indents)-1]
-		p := l.position()
-		l.emit(token.Dedent, "", p)
-	}
-	p := l.position()
-	l.emit(token.EOF, "", p)
 	return nil
 }
 
@@ -231,15 +278,6 @@ func (l *lexer) scanIndent() error {
 		return nil
 	}
 	l.atStart = false
-	l.lineIndent = columns
-	if len(l.layouts) > 0 && l.depth == l.layoutDepth() && closesLambdaLayout(l.peek()) {
-		// A comma or closing bracket on its own line ends the lambda body
-		// rather than continuing it, so endLambdaLayout unwinds the
-		// indentation stack when the token itself is scanned. Measuring this
-		// line here would instead reject an indentation that is allowed to sit
-		// outside the body's block.
-		return nil
-	}
 	top := l.indents[len(l.indents)-1]
 	p := token.Position{Offset: startOffset, Line: l.line, Column: 1}
 	if l.peek() == '#' {
@@ -258,22 +296,20 @@ func (l *lexer) scanIndent() error {
 		// still closes the blocks the code below it has left. An indentation
 		// matching no outer block is not an error on a comment-only line: the
 		// comment keeps the scope of the nearest block above it.
-		floor := l.indentFloor()
-		for len(l.indents) > floor && columns < l.indents[len(l.indents)-1] {
-			l.indents = l.indents[:len(l.indents)-1]
+		for len(l.indents) > 1 && columns < l.indents[len(l.indents)-1] {
+			l.popIndent()
 			l.emit(token.Dedent, "", p)
 		}
 		return nil
 	}
-	l.trackMatchIndent(columns)
 	if columns > top {
-		l.indents = append(l.indents, columns)
+		l.pushIndent(columns)
 		l.emit(token.Indent, "", p)
 		return nil
 	}
 	if columns < top {
 		for len(l.indents) > 1 && columns < l.indents[len(l.indents)-1] {
-			l.indents = l.indents[:len(l.indents)-1]
+			l.popIndent()
 			l.emit(token.Dedent, "", p)
 		}
 		if columns != l.indents[len(l.indents)-1] {
@@ -294,16 +330,6 @@ func (l *lexer) nextCodeIndent() (int, bool) {
 	columns, start, ok := nextCodeIndent(l.source, l.offset)
 	l.codeLineIndent, l.codeLineStart, l.codeLineFound = columns, start, ok
 	return columns, ok
-}
-
-// indentFloor returns the smallest indentation stack height that indentation
-// alone may unwind to. Inside a multiline lambda body only the comma or closing
-// bracket that ends the body may leave it, so the body's own level is a floor.
-func (l *lexer) indentFloor() int {
-	if len(l.layouts) == 0 {
-		return 1
-	}
-	return l.layouts[len(l.layouts)-1].indentDepth + 1
 }
 
 // measureIndent returns the indentation width of the line starting at offset,
@@ -347,12 +373,6 @@ func nextCodeIndent(source []byte, offset int) (columns, start int, ok bool) {
 		}
 		return columns, offset, true
 	}
-}
-
-// closesLambdaLayout reports whether c, as the first character of a line,
-// terminates an enclosing multiline lambda body.
-func closesLambdaLayout(c byte) bool {
-	return c == ',' || c == ')' || c == ']' || c == '}'
 }
 
 func (l *lexer) scanComment(start token.Position) {
@@ -399,14 +419,7 @@ func (l *lexer) scanIdentifier(start token.Position) {
 		l.advance()
 	}
 	text := string(l.source[begin:l.offset])
-	typ := token.LookupIdentifier(text)
-	l.emit(typ, text, start)
-	if typ == token.Func && l.depth > l.layoutDepth() {
-		l.lambdaHeaderDepth = l.depth
-	}
-	if typ == token.Match && len(l.layouts) > 0 && l.depth == l.layoutDepth() && l.startsStatement() {
-		l.openMatchBlock()
-	}
+	l.emit(token.LookupIdentifier(text), text, start)
 }
 
 func (l *lexer) scanNumber(start token.Position) {
@@ -505,41 +518,24 @@ func (l *lexer) scanOperator(start token.Position) error {
 		{"/", token.Slash}, {"<", token.Less}, {">", token.Greater}, {"&", token.Ampersand},
 		{"|", token.Pipe}, {"^", token.Caret}, {"~", token.Tilde}, {"!", token.Bang},
 	}
-	remaining := string(l.source[l.offset:])
+	remaining := l.source[l.offset:]
 	for _, op := range operators {
-		if strings.HasPrefix(remaining, op.text) {
-			if op.typ == token.Comma && len(l.layouts) > 0 && l.depth == l.layoutDepth() &&
-				!l.onMatchBranchHeader() {
-				l.endLambdaLayout(start)
-			}
-			if (op.typ == token.RParen || op.typ == token.RBracket || op.typ == token.RBrace) && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
-				l.endLambdaLayout(start)
-			}
+		if bytes.HasPrefix(remaining, []byte(op.text)) {
 			for range len(op.text) {
 				l.advance()
 			}
-			switch op.typ {
-			case token.LParen, token.LBracket, token.LBrace:
-				l.depth++
-			case token.RParen, token.RBracket, token.RBrace:
-				if l.depth > 0 {
-					l.depth--
+			if l.tracksBrackets {
+				switch op.typ {
+				case token.LParen, token.LBracket, token.LBrace:
+					l.depth++
+				case token.RParen, token.RBracket, token.RBrace:
+					if l.depth > 0 {
+						l.depth--
+					}
 				}
-				for len(l.layouts) > 0 && l.depth < l.layoutDepth() {
-					l.layouts = l.layouts[:len(l.layouts)-1]
-					l.lambdaHeaderDepth = 0
-				}
-				for len(l.matches) > 0 && l.matches[len(l.matches)-1].layout > len(l.layouts) {
-					l.matches = l.matches[:len(l.matches)-1]
-				}
+				l.multiline = l.depth > 0
 			}
 			l.emit(op.typ, op.text, start)
-			if op.typ == token.Colon && l.lambdaHeaderDepth > 0 && l.lambdaHeaderDepth == l.depth {
-				if l.blockFollows() {
-					l.layouts = append(l.layouts, lambdaLayout{depth: l.depth, indentDepth: len(l.indents)})
-				}
-				l.lambdaHeaderDepth = 0
-			}
 			return nil
 		}
 	}
@@ -547,38 +543,9 @@ func (l *lexer) scanOperator(start token.Position) error {
 	return &Error{Position: start, Message: fmt.Sprintf("unexpected character %q", r)}
 }
 
-func (l *lexer) endLambdaLayout(position token.Position) {
-	if len(l.tokens) > 0 && l.tokens[len(l.tokens)-1].Type != token.Newline && l.tokens[len(l.tokens)-1].Type != token.Dedent {
-		l.emit(token.Newline, "", position)
-	}
-	layout := l.layouts[len(l.layouts)-1]
-	for len(l.indents) > layout.indentDepth {
-		l.indents = l.indents[:len(l.indents)-1]
-		l.emit(token.Dedent, "", position)
-	}
-	l.layouts = l.layouts[:len(l.layouts)-1]
-	l.lambdaHeaderDepth = 0
-	for len(l.matches) > 0 && l.matches[len(l.matches)-1].layout > len(l.layouts) {
-		l.matches = l.matches[:len(l.matches)-1]
-	}
-}
-
-func (l *lexer) blockFollows() bool {
-	for offset := l.offset; offset < len(l.source); offset++ {
-		switch l.source[offset] {
-		case ' ', '\t', '\r':
-			continue
-		case '\n', '#':
-			return true
-		default:
-			return false
-		}
-	}
-	return false
-}
-
 func (l *lexer) emit(typ token.Type, lexeme string, start token.Position) {
-	l.tokens = append(l.tokens, token.Token{Type: typ, Lexeme: lexeme, Span: token.Span{Start: start, End: l.position()}})
+	l.pending = append(l.pending, token.Token{Type: typ, Lexeme: lexeme, Span: token.Span{Start: start, End: l.position()}})
+	l.lastType = typ
 }
 
 func (l *lexer) done() bool { return l.offset >= len(l.source) }

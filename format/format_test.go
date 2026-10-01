@@ -669,8 +669,11 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n]\n",
 		},
 		{
-			name:   "an element another element follows",
-			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t, 2]\n",
+			name: "an element another element follows",
+			// The comma is written at the body's own indentation, which is the
+			// outermost one Godot accepts once a match has opened blocks inside
+			// the body.
+			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t, 2]\n",
 			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n\t2,\n]\n",
 		},
 		{
@@ -690,7 +693,7 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 		},
 		{
 			name:   "a parameter's default value",
-			source: "func f(a = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t):\n\tpass\n",
+			source: "func f(a = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t):\n\tpass\n",
 			want:   "func f(\n\t\ta = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t,\n):\n\tpass\n",
 		},
 		{
@@ -792,5 +795,24 @@ func TestCarriageReturnsLeaveNoTraceInAComment(t *testing.T) {
 				t.Errorf("formatting is not idempotent: %q then %q", formatted, second)
 			}
 		})
+	}
+}
+
+// A block lambda body ends at a dedent, which stands on no line of its own, so
+// nothing blank was written where it ends. The body used to be closed with a
+// line break the source did not hold, which put a blank line after the construct
+// holding the lambda.
+func TestBlockLambdaLeavesNoBlankLineBehind(t *testing.T) {
+	source := "func w():\n\tconfigure(func(options):\n\t\toptions.debug = true\n\t)\n\t_ready = true\n"
+	file, err := parser.Parse("blank.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := format.File(file)
+	if strings.Contains(formatted, "\n\n") {
+		t.Fatalf("formatted output holds a blank line that was never written:\n%s", formatted)
+	}
+	if _, err := parser.Parse("blank.gd", []byte(formatted)); err != nil {
+		t.Fatalf("formatted output did not parse: %v\n%s", err, formatted)
 	}
 }

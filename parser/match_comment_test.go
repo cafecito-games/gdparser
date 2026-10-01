@@ -67,7 +67,7 @@ func TestMatchComments(t *testing.T) {
 		},
 		{
 			name:   "a lambda that ends with a match before another element",
-			source: "var f = [func(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t, 2]\n",
+			source: "var f = [func(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t\t, 2]\n",
 			want:   "var f = [\n\tfunc(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n\t2,\n]\n",
 		},
 		{
