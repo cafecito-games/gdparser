@@ -330,8 +330,16 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		}
 		name, nameSpan = named.Lexeme, named.Span
 	}
+	// A lambda body does see the locals around it, so its scope is no barrier:
+	// Godot gives its suite the enclosing block as a parent, which is why a body
+	// cannot reuse a name from the function holding it.
+	p.pushScope(false)
+	defer p.popScope()
 	parameters, parameterComments, err := p.parseParameters(true)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.declareParameters(parameters); err != nil {
 		return nil, err
 	}
 	returnType := ""

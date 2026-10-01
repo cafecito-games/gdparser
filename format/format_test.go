@@ -471,8 +471,8 @@ func TestCollectionCommentPlacement(t *testing.T) {
 		},
 		{
 			name:   "an argument list holding only comments is still written",
-			source: "@e(\n\t# c\n)\nvar x := 1\n",
-			want:   "@e(\n\t\t# c\n)\nvar x := 1\n",
+			source: "@export_range(\n\t# c\n)\nvar x := 1\n",
+			want:   "@export_range(\n\t\t# c\n)\nvar x := 1\n",
 		},
 		{
 			name:   "a signal parameter list holding only comments is still written",

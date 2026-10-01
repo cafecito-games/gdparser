@@ -139,6 +139,17 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 	if static.Type == token.Static {
 		start = static.Span.Start
 	}
+	kind := variableName
+	if constant {
+		kind = constantName
+	}
+	if len(p.scopes) == 0 {
+		if err := p.declareMember(name, kind); err != nil {
+			return nil, err
+		}
+	} else if err := p.declareLocal(name, kind); err != nil {
+		return nil, err
+	}
 	declaration := &ast.VariableDeclaration{
 		Base: spanFrom(start, name.Span.End), Name: name.Lexeme, NameSpan: name.Span,
 		Constant: constant, Static: static.Type == token.Static, StaticSpan: static.Span, KeywordSpan: keyword.Span,
@@ -363,7 +374,9 @@ func (p *parser) parseAccessor(declaration *ast.VariableDeclaration, block bool)
 			}
 		}
 		var end token.Position
+		p.pushScope(true)
 		declaration.Getter, end, err = p.parseSuite()
+		p.popScope()
 		if err != nil {
 			return err
 		}
@@ -383,7 +396,15 @@ func (p *parser) parseAccessor(declaration *ast.VariableDeclaration, block bool)
 			return nameErr
 		}
 	}
+	p.pushScope(true)
+	if parameterSpan != (token.Span{}) {
+		if err := p.declareLocal(nameToken(parameter, parameterSpan), parameterName); err != nil {
+			p.popScope()
+			return err
+		}
+	}
 	body, end, err := p.parseSuite()
+	p.popScope()
 	if err != nil {
 		return err
 	}
@@ -399,8 +420,18 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	if err != nil {
 		return nil, err
 	}
+	if err := p.declareMember(name, functionName_); err != nil {
+		return nil, err
+	}
+	// A function body sees none of the locals around it, so its scope is a
+	// barrier, and its parameters are the first names in it.
+	p.pushScope(true)
+	defer p.popScope()
 	parameters, parameterComments, err := p.parseParameters(true)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.declareParameters(parameters); err != nil {
 		return nil, err
 	}
 	returnType := ""
@@ -547,6 +578,9 @@ func (p *parser) parseClass() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := p.declareMember(name, classMemberKey); err != nil {
+		return nil, err
+	}
 	extends := ""
 	var extendsSpan, baseTypeSpan token.Span
 	if p.at(token.Extends) {
@@ -556,7 +590,9 @@ func (p *parser) parseClass() (ast.Statement, error) {
 			return nil, err
 		}
 	}
+	p.pushClassScope()
 	body, end, err := p.parseClassSuite()
+	p.popClassScope()
 	if err != nil {
 		return nil, err
 	}
@@ -616,6 +652,9 @@ func (p *parser) parseSignal() (ast.Statement, error) {
 			return nil, err
 		}
 	}
+	if err := p.declareMember(name, signalName); err != nil {
+		return nil, err
+	}
 	return &ast.SignalDeclaration{
 		Base: spanFrom(start.Span.Start, p.previous().Span.End), Name: name.Lexeme, NameSpan: name.Span,
 		KeywordSpan: start.Span, Parameters: parameters, ParameterComments: parameterComments,
@@ -630,6 +669,11 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 		nameToken := p.advance()
 		name = nameToken.Lexeme
 		nameSpan = nameToken.Span
+	}
+	if name != "" {
+		if err := p.declareMember(nameToken(name, nameSpan), enumName); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := p.expect(token.LBrace, "expected '{' in enum declaration"); err != nil {
 		return nil, err
@@ -804,7 +848,7 @@ func (p *parser) parseFor() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, end, err := p.parseLoopSuite()
+	body, end, err := p.parseLoopSuiteBinding(variable, loopName)
 	if err != nil {
 		return nil, err
 	}
@@ -930,6 +974,9 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			if err != nil {
 				return nil, err
 			}
+		}
+		for _, bind := range patternBinds(matchCase.Patterns) {
+			p.pendingLocals = append(p.pendingLocals, pendingLocal{name: bind, kind: bindName})
 		}
 		var caseEnd token.Position
 		matchCase.Body, caseEnd, err = p.parseSuite()
@@ -1142,6 +1189,12 @@ func (p *parser) parseTypeList(out *strings.Builder, comments *[]ast.CollectionC
 	}
 }
 
+// nameToken rebuilds the token a name was read from, so that a name kept as a
+// string can still be reported where it was written.
+func nameToken(name string, span token.Span) token.Token {
+	return token.Token{Type: token.Identifier, Lexeme: name, Span: span}
+}
+
 func componentEnd(body []ast.Statement, fallback token.Position) token.Position {
 	for i := len(body) - 1; i >= 0; i-- {
 		if body[i] != nil {
@@ -1149,6 +1202,22 @@ func componentEnd(body []ast.Statement, fallback token.Position) token.Position 
 		}
 	}
 	return fallback
+}
+
+// patternBinds returns the names the patterns of one branch bind, in source
+// order. They are declared in the block the branch opens, as Godot declares them
+// in the branch's suite.
+func patternBinds(patterns []ast.Expression) []token.Token {
+	var binds []token.Token
+	for _, pattern := range patterns {
+		ast.Inspect(pattern, func(node ast.Node) bool {
+			if bind, ok := node.(*ast.BindingPattern); ok {
+				binds = append(binds, nameToken(bind.Name, bind.NameSpan))
+			}
+			return true
+		})
+	}
+	return binds
 }
 
 // bindsValue reports whether pattern binds the matched value, at any depth

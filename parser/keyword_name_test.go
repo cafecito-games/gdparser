@@ -99,11 +99,19 @@ func TestAKeywordIsAMemberName(t *testing.T) {
 // An annotation name is read as text, so Godot accepts every keyword after '@'
 // and reports an unknown annotation rather than a syntax error.
 func TestAKeywordIsAnAnnotationName(t *testing.T) {
+	// Godot scans "@" and the name as one token, so a reserved word reads as a
+	// name here rather than as the keyword it otherwise is. No annotation Godot
+	// knows is spelled as one, so each is turned away for not existing, which is
+	// what shows that the name itself was read.
 	for _, keyword := range []string{"if", "class", "true", "null", "var", "match"} {
 		t.Run(keyword, func(t *testing.T) {
 			source := "@" + keyword + "\nvar a = 1\n"
-			if _, err := parser.Parse("name.gd", []byte(source)); err != nil {
-				t.Fatalf("parse %q: %v", source, err)
+			_, err := parser.Parse("name.gd", []byte(source))
+			if err == nil {
+				t.Fatal("expected a parse error")
+			}
+			if want := "unrecognized annotation \"@" + keyword + "\""; !strings.Contains(err.Error(), want) {
+				t.Fatalf("error does not name the rule: %v", err)
 			}
 		})
 	}

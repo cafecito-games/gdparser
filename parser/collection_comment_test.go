@@ -35,7 +35,7 @@ func TestCollectionCommentsSurviveFormatting(t *testing.T) {
 		{"enum end of line", "enum E {\n\tA,  # c\n\tB,\n}\n"},
 		{"nested collection", "var x = [\n\t[\n\t\t1,\n\t\t# c\n\t],\n]\n"},
 		{"opening line and own line", "var x = [  # c\n\t# d\n]\n"},
-		{"empty annotation argument list", "@e(\n\t# c\n)\nvar x := 1\n"},
+		{"empty annotation argument list", "@export_range(\n\t# c\n)\nvar x := 1\n"},
 		{"empty signal parameter list", "signal s(\n\t# c\n)\n"},
 		{"empty parameter list", "func f(\n\t# c\n):\n\tpass\n"},
 		{"empty lambda parameter list", "var g := func(\n\t# c\n):\n\tpass\n"},

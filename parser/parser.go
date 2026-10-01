@@ -28,6 +28,8 @@ func (e *Error) Error() string {
 // Parse parses one GDScript source file.
 func Parse(filename string, source []byte) (*ast.File, error) {
 	p := &parser{filename: filename, scanner: lexer.NewScanner(source)}
+	// The file is a class, with a member table of its own.
+	p.pushClassScope()
 	// Line breaks carry meaning at the top level, which is the one frame Godot
 	// keeps on its multiline stack for the whole parse.
 	p.pushMultiline(false)
@@ -67,6 +69,14 @@ type parser struct {
 	// which a formatter may not do, so they are held until the statement ends and
 	// stand on their own lines after it, in the scope they were written in.
 	strayComments []*ast.Comment
+	// scopes is the stack of local scopes, innermost last, and classScopes the
+	// stack of class member tables. Godot keeps the same two, as a suite's locals
+	// and a class's members, and reports a name declared twice in either.
+	scopes      []scope
+	classScopes []map[string]string
+	// pendingLocals holds the names a header declares in the block it is about to
+	// open, such as a loop variable, which has no scope to go in until then.
+	pendingLocals []pendingLocal
 	// functionName is the name of the function whose body is being read, or empty
 	// outside one and inside a lambda. Godot reads it to hold a constructor to its
 	// own rules.
@@ -149,6 +159,19 @@ func (p *parser) multiline() bool {
 // that line rather than the first statement of the block it opens.
 func (p *parser) dropBlankLines() { p.blankLines = 0 }
 
+// pendingLocal is a name waiting for the block that will hold it.
+type pendingLocal struct {
+	name token.Token
+	kind string
+}
+
+// takePendingLocals returns and clears the names waiting for a block.
+func (p *parser) takePendingLocals() []pendingLocal {
+	locals := p.pendingLocals
+	p.pendingLocals = nil
+	return locals
+}
+
 // spendLambdaEnd settles a lambda that ended inside the compound statement just
 // read. Godot requires nothing after such a statement, so this only spends a
 // mark already left: when the statement's line ends, or its block does, the
@@ -181,6 +204,9 @@ func (p *parser) takeBlankLines() int {
 func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error) {
 	var statements []ast.Statement
 	var pending []*ast.Annotation
+	// scriptHeadOpen reports that nothing but a comment or an annotation has been
+	// read yet, which is where an annotation of the script itself belongs.
+	scriptHeadOpen := true
 	pendingBlankLines := 0
 	// flush emits annotations that decorate no declaration as plain statements.
 	flush := func() {
@@ -238,6 +264,35 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			return nil, err
 		}
 		if annotation, ok := stmt.(*ast.Annotation); ok {
+			// Where the annotation stands decides what it may be: the script's
+			// own annotations come before extends and class_name, a class body
+			// takes its members' and the standalone ones, and a function body
+			// takes a statement's.
+			allowed := targetStatement | targetStandalone
+			if classBody {
+				allowed = targetClassLevel | targetStandalone
+				if scriptHeadOpen {
+					allowed |= targetScript
+				}
+			}
+			if err := p.checkAnnotation(annotation, allowed); err != nil {
+				return nil, err
+			}
+			if decoratesNothing(annotation.Name) {
+				// The annotation belongs to no declaration below it, so it stands
+				// as a statement of its own rather than waiting for one. Godot
+				// handles these where it reads them, for the same reason.
+				annotation.BlankLinesBefore = blankLines
+				annotation.OwnLine = true
+				statements = append(statements, annotation)
+				if p.at(token.Comment) {
+					annotation.TrailingComment = commentNode(p.advance())
+				}
+				if _, err := p.expect(token.Newline, "expected end of line after the annotation"); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if len(pending) == 0 {
 				pendingBlankLines = blankLines
 			}
@@ -254,7 +309,17 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			}
 			continue
 		}
+		if !opensScriptHead(stmt) {
+			// Godot reads a script's own annotations in a prologue, before
+			// "class_name" and "extends", and those before everything else. Only
+			// a comment, a string standing in for one, and another annotation
+			// leave the head open; the two directives close it.
+			scriptHeadOpen = false
+		}
 		if len(pending) > 0 {
+			if err := p.checkAnnotationTargets(stmt, pending); err != nil {
+				return nil, err
+			}
 			if attachAnnotations(stmt, pending) {
 				blankLines = pendingBlankLines
 				pending = nil
@@ -445,6 +510,22 @@ func (p *parser) parseLoopSuite() ([]ast.Statement, token.Position, error) {
 	return body, end, err
 }
 
+// parseLoopSuiteBinding parses the block a for opens, with the loop variable
+// declared in it. Godot declares it in the body rather than beside it, so the
+// name is free again once the loop ends.
+func (p *parser) parseLoopSuiteBinding(variable token.Token, kind string) ([]ast.Statement, token.Position, error) {
+	if taken, ok := p.lookupLocal(variable.Lexeme); ok {
+		return nil, token.Position{}, p.error(variable,
+			"there is already a "+taken+" named "+strconv.Quote(variable.Lexeme)+" in this scope")
+	}
+	wasInLoop := p.inLoop
+	p.inLoop = true
+	p.pendingLocals = append(p.pendingLocals, pendingLocal{name: variable, kind: kind})
+	body, end, err := p.parseSuiteFor(false, false)
+	p.inLoop = wasInLoop
+	return body, end, err
+}
+
 // parseClassSuite parses the block an inner class opens, which holds only
 // declarations.
 func (p *parser) parseClassSuite() ([]ast.Statement, token.Position, error) {
@@ -525,6 +606,17 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 	}
 	if _, err := p.expect(token.Indent, "expected an indented block"); err != nil {
 		return nil, token.Position{}, err
+	}
+	if !classBody {
+		p.pushScope(false)
+		defer p.popScope()
+		// A loop variable and a branch's pattern binds are declared in the block
+		// the header opens, which only exists now.
+		for _, local := range p.takePendingLocals() {
+			if err := p.declareLocal(local.name, local.kind); err != nil {
+				return nil, token.Position{}, err
+			}
+		}
 	}
 	body, err := p.parseStatements(true, classBody)
 	if err != nil {
@@ -646,6 +738,20 @@ func beginsStatement(typ token.Type) bool {
 		return true
 	}
 	return beginsExpression(typ)
+}
+
+// opensScriptHead reports whether statement leaves the head of the script open,
+// which is where an annotation of the script itself belongs. A comment does, and
+// so does a string written on its own, which Godot reads in the same prologue.
+func opensScriptHead(statement ast.Statement) bool {
+	switch node := statement.(type) {
+	case *ast.Comment, *ast.Annotation:
+		return true
+	case *ast.ExpressionStatement:
+		literal, ok := node.Expression.(*ast.Literal)
+		return ok && literal.Kind == ast.StringLiteral
+	}
+	return false
 }
 
 // beginsClassMember reports whether typ may open something a class body holds:
