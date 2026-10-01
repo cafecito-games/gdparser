@@ -282,3 +282,71 @@ func TestOuterLambdaBodyContinuesAfterANestedLambda(t *testing.T) {
 		t.Fatalf("outer lambda body statement 1 keyword = %q, want \"pass\"", keyword.Keyword)
 	}
 }
+
+// TestCommentOnALineOfItsOwnDoesNotBreakBlocks covers comment-only lines whose
+// indentation matches no block, or whose block the code below them re-enters.
+func TestCommentOnALineOfItsOwnDoesNotBreakBlocks(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{"unindented to no outer block", "func a():\n\tpass\n  # c\n"},
+		{"unindented to no outer block before code", "func a():\n\tpass\n  # c\n\tprint()\n"},
+		{"dedented then back into the block", "func a():\n\tif true:\n\t\tpass\n\t# c\n\t\tprint()\n"},
+		{"dedented to the outer block", "func a():\n\tif true:\n\t\tpass\n\t# c\n\tprint()\n"},
+		{"dedented past every block", "func a():\n\tif true:\n\t\tpass\n# c\n\t\tprint()\n"},
+		{"run of comments at mixed levels", "func a():\n\tif true:\n\t\tpass\n\t# one\n  # two\n\t\tprint()\n"},
+		{"blank line inside the run", "func a():\n\tif true:\n\t\tpass\n\t# one\n\n\t\tprint()\n"},
+		{"no trailing newline", "func a():\n\tpass\n  # c"},
+		{"inside a lambda body", "var x = [func():\n\t\tpass\n\t# c\n]\n"},
+		{"inside a match case", "func a():\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t# c\n\t\t\tprint()\n"},
+		{"before a later declaration", "func a():\n\tpass\n  # c\nfunc b():\n\tpass\n"},
+		{"inside a nested class", "class C:\n\tfunc a():\n\t\tpass\n\t# c\n\t\tprint()\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("comment.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := gdformat.File(file)
+			if !strings.Contains(formatted, "# c") && !strings.Contains(formatted, "# one") {
+				t.Fatalf("formatted source dropped the comment:\n%s", formatted)
+			}
+			again, err := parser.Parse("comment.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+			if reformatted := gdformat.File(again); reformatted != formatted {
+				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
+			}
+		})
+	}
+}
+
+func TestCommentKeepsTheBlockTheCodeBelowReenters(t *testing.T) {
+	file, err := parser.Parse("", []byte("func a():\n\tif true:\n\t\tpass\n\t# c\n\t\tprint()\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	function := file.Statements[0].(*ast.FunctionDeclaration)
+	branch := function.Body[0].(*ast.IfStatement).Branches[0]
+	if len(branch.Body) != 3 {
+		t.Fatalf("if body holds %d statements, want 3: %#v", len(branch.Body), branch.Body)
+	}
+	if _, ok := branch.Body[1].(*ast.Comment); !ok {
+		t.Fatalf("if body statement 1 = %T, want *ast.Comment", branch.Body[1])
+	}
+}
+
+func TestCommentMatchingNoBlockClosesToTheNearestOne(t *testing.T) {
+	file, err := parser.Parse("", []byte("func a():\n\tpass\n  # c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Statements) != 2 {
+		t.Fatalf("file holds %d statements, want 2: %#v", len(file.Statements), file.Statements)
+	}
+	if _, ok := file.Statements[1].(*ast.Comment); !ok {
+		t.Fatalf("top-level statement 1 = %T, want *ast.Comment", file.Statements[1])
+	}
+}

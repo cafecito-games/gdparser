@@ -142,21 +142,10 @@ func (l *lexer) run() error {
 
 func (l *lexer) scanIndent() error {
 	startOffset := l.offset
-	columns := 0
-	for !l.done() {
-		switch l.peek() {
-		case ' ':
-			columns++
-			l.advance()
-		case '\t':
-			columns += 4 - columns%4
-			l.advance()
-		default:
-			goto measured
-		}
+	columns, offset := measureIndent(l.source, l.offset)
+	for l.offset < offset {
+		l.advance()
 	}
-
-measured:
 	// Blank lines do not affect the indentation stack.
 	if l.done() || l.peek() == '\n' || l.peek() == '\r' {
 		return nil
@@ -172,11 +161,27 @@ measured:
 	}
 	top := l.indents[len(l.indents)-1]
 	p := token.Position{Offset: startOffset, Line: l.line, Column: 1}
-	if columns > top && l.peek() == '#' {
-		// A comment-only line may sit deeper than its block without opening
-		// one, as Godot's tokenizer discards comments before measuring
-		// indentation. Dedenting comments still close blocks, so that a
-		// comment written at an outer level stays in that outer scope.
+	if l.peek() == '#' {
+		// Godot's tokenizer discards comments before measuring indentation, so
+		// a comment-only line neither opens nor closes a block on its own. Its
+		// indentation only says which block it belongs to, and that is settled
+		// by the next line of code: when that line is deeper, the comment
+		// belongs to the block the code stays in, and nothing closes here.
+		if next, ok := nextCodeIndent(l.source, l.offset); ok && next > columns {
+			columns = next
+		}
+		if columns >= top {
+			return nil
+		}
+		// A comment written at an outer level keeps that outer scope, so it
+		// still closes the blocks the code below it has left. An indentation
+		// matching no outer block is not an error on a comment-only line: the
+		// comment keeps the scope of the nearest block above it.
+		floor := l.indentFloor()
+		for len(l.indents) > floor && columns < l.indents[len(l.indents)-1] {
+			l.indents = l.indents[:len(l.indents)-1]
+			l.emit(token.Dedent, "", p)
+		}
 		return nil
 	}
 	if columns > top {
@@ -194,6 +199,58 @@ measured:
 		}
 	}
 	return nil
+}
+
+// indentFloor returns the smallest indentation stack height that indentation
+// alone may unwind to. Inside a multiline lambda body only the comma or closing
+// bracket that ends the body may leave it, so the body's own level is a floor.
+func (l *lexer) indentFloor() int {
+	if len(l.layouts) == 0 {
+		return 1
+	}
+	return l.layouts[len(l.layouts)-1].indentDepth + 1
+}
+
+// measureIndent returns the indentation width of the line starting at offset,
+// and the offset of its first non-indentation byte. A tab advances to the next
+// multiple of four columns, as Godot's tokenizer measures it.
+func measureIndent(source []byte, offset int) (columns, next int) {
+	for offset < len(source) {
+		switch source[offset] {
+		case ' ':
+			columns++
+		case '\t':
+			columns += 4 - columns%4
+		default:
+			return columns, offset
+		}
+		offset++
+	}
+	return columns, offset
+}
+
+// nextCodeIndent returns the indentation width of the next line that holds
+// code, skipping the rest of the line at offset along with any blank and
+// comment-only lines, and reports whether such a line exists.
+func nextCodeIndent(source []byte, offset int) (int, bool) {
+	for {
+		for offset < len(source) && source[offset] != '\n' {
+			offset++
+		}
+		if offset >= len(source) {
+			return 0, false
+		}
+		offset++
+		columns, next := measureIndent(source, offset)
+		if next >= len(source) {
+			return 0, false
+		}
+		offset = next
+		if source[offset] == '\n' || source[offset] == '\r' || source[offset] == '#' {
+			continue
+		}
+		return columns, true
+	}
 }
 
 // closesLambdaLayout reports whether c, as the first character of a line,

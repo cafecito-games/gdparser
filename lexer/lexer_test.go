@@ -217,3 +217,56 @@ func TestLexNestedLambdaLayoutsUnwindIndependently(t *testing.T) {
 		}
 	}
 }
+
+func TestLexCommentUnindentedToNoOuterBlock(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\n\tpass\n  # c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline, token.Dedent,
+		token.Comment, token.Newline, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}
+
+func TestLexCommentDoesNotCloseABlockTheCodeBelowReenters(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\n\tif true:\n\t\tpass\n\t# c\n\t\tprint()\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The comment sits at the function body's level, but the line below it
+	// returns to the if body, so no block closes at the comment.
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.If, token.True, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline,
+		token.Comment, token.Newline,
+		token.Identifier, token.LParen, token.RParen, token.Newline,
+		token.Dedent, token.Dedent, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}
