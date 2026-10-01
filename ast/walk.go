@@ -184,13 +184,15 @@ func Children(node Node) []Node {
 		addCollectionComments(n.Comments, len(n.Members))
 	case *MatchStatement:
 		addExpr(n.Value)
-		for _, matchCase := range n.Cases {
+		for index, matchCase := range n.Cases {
+			addCollectionComments(n.Comments, index)
 			for _, pattern := range matchCase.Patterns {
 				addExpr(pattern)
 			}
 			addExpr(matchCase.Guard)
 			addStmts(matchCase.Body)
 		}
+		addCollectionComments(n.Comments, len(n.Cases))
 	}
 	if bearer, ok := node.(TriviaBearer); ok {
 		if comment := bearer.StatementTrivia().TrailingComment; comment != nil {

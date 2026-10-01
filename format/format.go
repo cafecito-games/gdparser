@@ -222,11 +222,31 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 		return concat(text("for "+variable+" in "), p.expression(node.Iterable, 0), text(":"), p.suite(node.Body))
 	case *ast.MatchStatement:
 		parts := []doc{text("match "), p.expression(node.Value, 0), text(":")}
-		cases := make([]doc, len(node.Cases))
-		for index, matchCase := range node.Cases {
-			cases[index] = p.matchCase(matchCase)
+		// A comment that ended the "match" line stays on it.
+		for _, comment := range ast.CollectionCommentsAt(node.Comments, 0, true) {
+			parts = append(parts, text("  "+p.commentText(comment)))
 		}
-		return concat(concat(parts...), nest(1, concat(hardLine, join(hardLine, cases))))
+		var lines []doc
+		for index, matchCase := range node.Cases {
+			for _, comment := range ast.CollectionCommentsAt(node.Comments, index, false) {
+				lines = append(lines, text(p.commentText(comment)))
+			}
+			if index > 0 {
+				// Only the "match" line itself can hold a trailing comment, so
+				// one anchored deeper takes a line of its own rather than being
+				// dropped.
+				for _, comment := range ast.CollectionCommentsAt(node.Comments, index, true) {
+					lines = append(lines, text(p.commentText(comment)))
+				}
+			}
+			lines = append(lines, p.matchCase(matchCase))
+		}
+		for _, trailing := range []bool{false, true} {
+			for _, comment := range ast.CollectionCommentsAt(node.Comments, len(node.Cases), trailing) {
+				lines = append(lines, text(p.commentText(comment)))
+			}
+		}
+		return concat(concat(parts...), nest(1, concat(hardLine, join(hardLine, lines))))
 	default:
 		panic(fmt.Sprintf("format: unsupported statement %T", statement))
 	}

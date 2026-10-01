@@ -249,6 +249,10 @@ type MatchStatement struct {
 	KeywordSpan token.Span  `json:"keyword_span,omitempty"`
 	Value       Expression  `json:"value"`
 	Cases       []MatchCase `json:"cases"`
+	// Comments holds the comments written inside the statement but outside any
+	// case body, anchored to the case they precede. A comment that ended the
+	// "match" line itself is anchored to the first case and marked trailing.
+	Comments []CollectionComment `json:"comments,omitempty"`
 }
 
 func (*MatchStatement) node()      {}

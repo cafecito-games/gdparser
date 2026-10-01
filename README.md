@@ -246,11 +246,11 @@ Statements also record the formatting-relevant context the source gave them:
   statement, not an annotation statement followed by a declaration, and a
   comment written after a statement is that statement's trivia rather than a
   sibling comment statement.
-- `ast.CollectionComment` holds a comment written between the delimiters of a
-  bracketed construct, where no statement exists to carry it. Arrays,
-  dictionaries, enum bodies, argument lists, and parameter lists each expose
-  such comments, anchored to the item they were written against and marked when
-  they ended that item's line.
+- `ast.CollectionComment` holds a comment written where no statement exists to
+  carry it. Arrays, dictionaries, enum bodies, argument lists, and parameter
+  lists expose the comments between their delimiters, and a `match` statement
+  exposes those between its cases, each anchored to the item it was written
+  against and marked when it ended that item's line.
 - String literals record their quote character and the triple-quoted and
   `r`-prefixed forms, so they can be requoted without re-lexing their escapes.
 
