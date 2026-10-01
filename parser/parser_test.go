@@ -180,3 +180,49 @@ func TestTopLevelCommentAfterFunctionIsNotInFunctionBody(t *testing.T) {
 		t.Fatalf("top-level statement 1 = %T, want *ast.Comment", file.Statements[1])
 	}
 }
+
+func TestCommentIndentedDeeperThanItsBlock(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{"function body", "func a():\n\tpass\n\t\t# c\n"},
+		{"tab then space", "func a():\n\tpass\n\t # c\n"},
+		{"before a sibling statement", "func a():\n\tvar x := 1\n\t\t# c\n\tvar y := 2\n"},
+		{"after a blank line", "func a():\n\tpass\n\n\t\t# c\n"},
+		{"nested block", "func a():\n\tif true:\n\t\tpass\n\t\t\t# c\n"},
+		{"class level", "var a := 1\n\t# c\n"},
+		{"no trailing newline", "func a():\n\tpass\n\t\t# c"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("deeper.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := gdformat.File(file)
+			if !strings.Contains(formatted, "# c") {
+				t.Errorf("formatted source dropped the comment:\n%s", formatted)
+			}
+			if _, err := parser.Parse("deeper.gd", []byte(formatted)); err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+		})
+	}
+}
+
+func TestDeeperCommentStaysInTheBlockItFollows(t *testing.T) {
+	file, err := parser.Parse("", []byte("func a():\n\tpass\n\t\t# c\nfunc b():\n\tpass\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := file.Statements[0].(*ast.FunctionDeclaration)
+	if len(first.Body) != 2 {
+		t.Fatalf("first function body contains %d nodes, want 2", len(first.Body))
+	}
+	if _, ok := first.Body[1].(*ast.Comment); !ok {
+		t.Fatalf("body node 1 = %T, want *ast.Comment", first.Body[1])
+	}
+	if _, ok := file.Statements[1].(*ast.FunctionDeclaration); !ok {
+		t.Fatalf("top-level statement 1 = %T, want *ast.FunctionDeclaration", file.Statements[1])
+	}
+}

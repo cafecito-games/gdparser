@@ -138,14 +138,20 @@ func (l *lexer) scanIndent() error {
 	}
 
 measured:
-	// Blank lines do not affect the indentation stack. Comment indentation is
-	// significant to the AST even though Godot ignores it syntactically.
+	// Blank lines do not affect the indentation stack.
 	if l.done() || l.peek() == '\n' || l.peek() == '\r' {
 		return nil
 	}
 	l.atStart = false
 	top := l.indents[len(l.indents)-1]
 	p := token.Position{Offset: startOffset, Line: l.line, Column: 1}
+	if columns > top && l.peek() == '#' {
+		// A comment-only line may sit deeper than its block without opening
+		// one, as Godot's tokenizer discards comments before measuring
+		// indentation. Dedenting comments still close blocks, so that a
+		// comment written at an outer level stays in that outer scope.
+		return nil
+	}
 	if columns > top {
 		l.indents = append(l.indents, columns)
 		l.emit(token.Indent, "", p)
