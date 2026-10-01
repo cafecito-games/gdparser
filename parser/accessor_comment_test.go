@@ -115,6 +115,49 @@ func TestPropertyAccessorCommentAnchors(t *testing.T) {
 	}
 }
 
+// Every comment reaches traversal exactly once, whichever accessors the
+// property declares.
+func TestPropertyAccessorCommentsAreChildrenOnce(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "a getter only",
+			source: "var x: int:\n\t# head\n\tget:\n\t\treturn 1\n\t# tail\n",
+			want:   "# head|# tail",
+		},
+		{
+			name:   "a setter only",
+			source: "var x: int:\n\t# head\n\tset(v):\n\t\tpass\n\t# tail\n",
+			want:   "# head|# tail",
+		},
+		{
+			name:   "both accessors",
+			source: "var x: int:\n\t# head\n\tget:\n\t\treturn 1\n\t# middle\n\tset(v):\n\t\tpass\n\t# tail\n",
+			want:   "# head|# middle|# tail",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("accessor.gd", []byte(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			declaration := file.Statements[0].(*ast.VariableDeclaration)
+			var seen []string
+			for _, child := range ast.Children(declaration) {
+				if comment, ok := child.(*ast.Comment); ok {
+					seen = append(seen, comment.Text)
+				}
+			}
+			if got := strings.Join(seen, "|"); got != test.want {
+				t.Fatalf("children comments = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 // A property has one getter and one setter, so a repeated accessor would
 // overwrite the one before it and lose its body. Godot rejects it too.
 func TestDuplicatePropertyAccessorIsRejected(t *testing.T) {

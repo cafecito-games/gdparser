@@ -143,14 +143,14 @@ func Children(node Node) []Node {
 		// written in, and the comments between them follow that order.
 		addCollectionComments(n.AccessorComments, 0)
 		addStmts(n.Getter)
-		if n.Getter != nil {
+		if n.Getter != nil && n.Setter != nil {
 			addCollectionComments(n.AccessorComments, 1)
 		}
 		if n.Setter != nil {
 			addStmts(n.Setter.Body)
 		}
-		if accessorCount := accessorCount(n); accessorCount > 0 {
-			addCollectionComments(n.AccessorComments, accessorCount)
+		if count := accessorCount(n); count > 0 {
+			addCollectionComments(n.AccessorComments, count)
 		}
 	case *Assignment:
 		addExpr(n.Target)
