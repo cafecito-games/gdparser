@@ -113,3 +113,40 @@ func TestPreserveNumbersStillParses(t *testing.T) {
 		t.Fatalf("output did not parse: %v\n%s", err, output)
 	}
 }
+
+// The comma after an item that holds the line it ends on survives
+// NoTrailingCommas, because it is what lets the construct's bracket leave the
+// block. Nested inside another construct the bracket has no other step to take
+// out, and the engine refuses the output without it.
+func TestNoTrailingCommasKeepsTheCommaThatLeavesABlock(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "an array at a statement's indentation",
+			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n]\n",
+			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n]\n",
+		},
+		{
+			name:   "an array nested in a dictionary",
+			source: "var d = {\"k\": [func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n]}\n",
+			want:   "var d = {\n\t\"k\": [\n\t\tfunc(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t,\n\t]\n}\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("options.gd", []byte(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			formatted := format.FileWithOptions(file, format.Options{TrailingCommas: format.NoTrailingCommas})
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+			if _, err := parser.Parse("options.gd", []byte(formatted)); err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+		})
+	}
+}

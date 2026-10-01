@@ -360,27 +360,27 @@ func TestCommaAfterItemEndingInAComment(t *testing.T) {
 		{
 			name:   "required separator moves below the comment",
 			source: "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n, 2]\n",
-			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n\t,\n\t2,\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n\t\t,\n\t2,\n]\n",
 		},
 		{
 			name:   "optional trailing comma is dropped",
 			source: "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n]\n",
-			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n\t\t,\n]\n",
 		},
 		{
 			name:   "same-line trailing comment keeps the separator",
 			source: "var x = [\n\tfunc():\n\t\tpass  # c\n, 2]\n",
-			want:   "var x = [\n\tfunc():\n\t\tpass  # c\n\t,\n\t2,\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass  # c\n\t\t,\n\t2,\n]\n",
 		},
 		{
 			name:   "same-line trailing comment drops the optional comma",
 			source: "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n]\n",
-			want:   "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n\t\t,\n]\n",
 		},
 		{
 			name:   "dictionary value ending in a comment",
 			source: "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n}\n",
-			want:   "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n}\n",
+			want:   "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n\t\t,\n}\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -513,22 +513,22 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 		{
 			name:   "a parameter's default value",
 			source: "func g(b, a = func(): return 1  # c\n):\n\tpass\n",
-			want:   "func g(\n\t\tb,\n\t\ta = func(): return 1  # c\n):\n\tpass\n",
+			want:   "func g(\n\t\tb,\n\t\ta = func(): return 1  # c\n\t\t\t,\n):\n\tpass\n",
 		},
 		{
 			name:   "an array element",
 			source: "var x = [func(): return 1  # c\n, 2]\n",
-			want:   "var x = [\n\tfunc(): return 1  # c\n\t,\n\t2,\n]\n",
+			want:   "var x = [\n\tfunc(): return 1  # c\n\t\t,\n\t2,\n]\n",
 		},
 		{
 			name:   "a call argument",
 			source: "func w():\n\tg(func(): return 1  # c\n\t)\n",
-			want:   "func w():\n\tg(\n\t\t\tfunc(): return 1  # c\n\t)\n",
+			want:   "func w():\n\tg(\n\t\t\tfunc(): return 1  # c\n\t\t\t\t,\n\t)\n",
 		},
 		{
 			name:   "a dictionary value",
 			source: "var d = {\"k\": func(): return 1  # c\n}\n",
-			want:   "var d = {\n\t\"k\": func(): return 1  # c\n}\n",
+			want:   "var d = {\n\t\"k\": func(): return 1  # c\n\t\t,\n}\n",
 		},
 		{
 			name:   "a subscript index",
@@ -538,47 +538,47 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 		{
 			name:   "a ternary's alternative, which takes parentheses",
 			source: "var b = true\nvar y = 1 if b else func(): return 1  # c\n",
-			want:   "var b = true\nvar y = 1 if b else (func(): return 1  # c\n)\n",
+			want:   "var b = true\nvar y = 1 if b else (func(): return 1  # c\n\t)\n",
 		},
 		{
 			name:   "an await operand, which takes parentheses",
 			source: "var f = await func(): return 1  # c\n",
-			want:   "var f = await (func(): return 1  # c\n)\n",
+			want:   "var f = await (func(): return 1  # c\n\t)\n",
 		},
 		{
 			name:   "an if condition, whose colon follows it",
-			source: "func w():\n\tif (func(): return 1  # c\n\t):\n\t\tpass\n",
-			want:   "func w():\n\tif (func(): return 1  # c\n\t):\n\t\tpass\n",
+			source: "func w():\n\tif (func(): return 1  # c\n\t\t):\n\t\tpass\n",
+			want:   "func w():\n\tif (func(): return 1  # c\n\t\t):\n\t\tpass\n",
 		},
 		{
 			name:   "a while condition",
-			source: "func w():\n\twhile (func(): return 1  # c\n\t):\n\t\tpass\n",
-			want:   "func w():\n\twhile (func(): return 1  # c\n\t):\n\t\tpass\n",
+			source: "func w():\n\twhile (func(): return 1  # c\n\t\t):\n\t\tpass\n",
+			want:   "func w():\n\twhile (func(): return 1  # c\n\t\t):\n\t\tpass\n",
 		},
 		{
 			name:   "a match value",
-			source: "func w():\n\tmatch (func(): return 1  # c\n\t):\n\t\t1:\n\t\t\tpass\n",
-			want:   "func w():\n\tmatch (func(): return 1  # c\n\t):\n\t\t1:\n\t\t\tpass\n",
+			source: "func w():\n\tmatch (func(): return 1  # c\n\t\t):\n\t\t1:\n\t\t\tpass\n",
+			want:   "func w():\n\tmatch (func(): return 1  # c\n\t\t):\n\t\t1:\n\t\t\tpass\n",
 		},
 		{
 			name:   "a dictionary key, whose separator follows it",
 			source: "var d = {(func(): return 1  # c\n): 2}\n",
-			want:   "var d = {\n\t(func(): return 1  # c\n\t): 2,\n}\n",
+			want:   "var d = {\n\t(func(): return 1  # c\n\t\t): 2,\n}\n",
 		},
 		{
 			name:   "an initializer an accessor block follows",
-			source: "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
-			want:   "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
+			source: "var x = (func(): return 1  # c\n\t):\n\tget:\n\t\treturn 1\n",
+			want:   "var x = (func(): return 1  # c\n\t):\n\tget:\n\t\treturn 1\n",
 		},
 		{
 			name:   "a match guard, whose colon follows it",
-			source: "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t):\n\t\t\tpass\n",
-			want:   "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t):\n\t\t\tpass\n",
+			source: "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t\t):\n\t\t\tpass\n",
+			want:   "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t\t):\n\t\t\tpass\n",
 		},
 		{
 			name:   "a member access on a parenthesized lambda",
 			source: "var y = (func(): return 1  # c\n).call()\n",
-			want:   "var y = (func(): return 1  # c\n).call()\n",
+			want:   "var y = (func(): return 1  # c\n\t).call()\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -647,5 +647,102 @@ func TestInlineLambdaFallsBackToABlock(t *testing.T) {
 	}
 	if _, err := parser.Parse("inline.gd", []byte(formatted)); err != nil {
 		t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+	}
+}
+
+// TestCommaAfterItemEndingInsideAMatch covers the comma that follows an item
+// whose last line lies inside a match statement's case list. Written straight
+// after such an item, Godot reads the comma as another pattern, so it takes the
+// next line, indented with the body it closes.
+func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "the last element of an array",
+			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n]\n",
+			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n]\n",
+		},
+		{
+			name:   "an element another element follows",
+			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t, 2]\n",
+			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n\t2,\n]\n",
+		},
+		{
+			name:   "a match inside the block that ends the body",
+			source: "var x = [func(v):\n\t\tfor i in []:\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n]\n",
+			want:   "var x = [\n\tfunc(v):\n\t\tfor i in []:\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t,\n]\n",
+		},
+		{
+			name:   "a dictionary value",
+			source: "var d = {\n\t\"run\": func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n}\n",
+			want:   "var d = {\n\t\"run\": func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n}\n",
+		},
+		{
+			name:   "a call argument",
+			source: "func w(v):\n\tg(func(x):\n\t\t\tmatch x:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t)\n",
+			want:   "func w(v):\n\tg(\n\t\t\tfunc(x):\n\t\t\t\tmatch x:\n\t\t\t\t\t1:\n\t\t\t\t\t\tpass\n\t\t\t\t,\n\t)\n",
+		},
+		{
+			name:   "a parameter's default value",
+			source: "func f(a = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t):\n\tpass\n",
+			want:   "func f(\n\t\ta = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t,\n):\n\tpass\n",
+		},
+		{
+			name:   "an operand that precedence parenthesizes",
+			source: "func w(q):\n\tvar x = [not func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t]\n",
+			want:   "func w(q):\n\tvar x = [\n\t\tnot (func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t),\n\t]\n",
+		},
+		{
+			// The parenthesis closes the case list, so the comma follows it on
+			// that line rather than taking one of its own.
+			name:   "an operand reached through a binary expression",
+			source: "func w(q, r):\n\tvar x = [r + func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t]\n",
+			want:   "func w(q, r):\n\tvar x = [\n\t\tr + (func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t),\n\t]\n",
+		},
+		{
+			// A comment at the end of the body sits inside the case body it
+			// was written in, so the case list is still open behind it.
+			name:   "a body ending in a comment after the match",
+			source: "func w(q):\n\tvar x = [not func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t# c\n\t]\n",
+			want:   "func w(q):\n\tvar x = [\n\t\tnot (func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t# c\n\t\t\t),\n\t]\n",
+		},
+		{
+			name:   "an await operand",
+			source: "func w(q):\n\tvar x = [await func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t]\n",
+			want:   "func w(q):\n\tvar x = [\n\t\tawait (func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t),\n\t]\n",
+		},
+		{
+			// A body that does not end inside a match keeps its comma in place,
+			// which is where the style guide wants it.
+			name:   "a body that ends in an ordinary statement",
+			source: "var x = [func():\n\t\tpass\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass,\n]\n",
+		},
+		{
+			name:   "a match followed by an ordinary statement",
+			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\tprint(v)\n]\n",
+			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\tprint(v),\n]\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("comma.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+			again, err := parser.Parse("comma.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+			if reformatted := format.File(again); reformatted != formatted {
+				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
+			}
+		})
 	}
 }
