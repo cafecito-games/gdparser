@@ -129,3 +129,45 @@ func TestDumpIncludesCollectionComments(t *testing.T) {
 		t.Fatalf("dump omitted the comment:\n%s", builder.String())
 	}
 }
+
+func TestNamedLambdaIsDumpedAndSerialized(t *testing.T) {
+	file, err := gdparser.ParseString("func a():\n\tvar f = func named(): pass\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	if err := ast.Dump(&builder, file); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(builder.String(), "LambdaExpression named") {
+		t.Fatalf("dump omitted the lambda name:\n%s", builder.String())
+	}
+	statement := ast.JSONValue(file).(map[string]any)["statements"].([]any)[0].(map[string]any)
+	lambda := statement["body"].([]any)[0].(map[string]any)["value"].(map[string]any)
+	if lambda["kind"] != "LambdaExpression" || lambda["name"] != "named" {
+		t.Fatalf("lambda JSON = %#v", lambda)
+	}
+	span, ok := lambda["name_span"].(map[string]any)
+	if !ok {
+		t.Fatalf("name span JSON = %#v", lambda["name_span"])
+	}
+	start := span["start"].(map[string]any)
+	if start["line"] != int64(2) || start["column"] != int64(15) {
+		t.Errorf("name span start = %#v, want line 2 column 15", start)
+	}
+}
+
+// An anonymous lambda carries no name, so the field is omitted.
+func TestAnonymousLambdaOmitsItsName(t *testing.T) {
+	file, err := gdparser.ParseString("func a():\n\tvar f = func(): pass\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := ast.JSONValue(file).(map[string]any)["statements"].([]any)[0].(map[string]any)
+	lambda := statement["body"].([]any)[0].(map[string]any)["value"].(map[string]any)
+	for _, key := range []string{"name", "name_span"} {
+		if _, present := lambda[key]; present {
+			t.Errorf("%s should be omitted for an anonymous lambda", key)
+		}
+	}
+}
