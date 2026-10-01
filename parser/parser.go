@@ -290,14 +290,15 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			// own annotations come before extends and class_name, a class body
 			// takes its members' and the standalone ones, and a function body
 			// takes a statement's.
-			allowed := targetStatement | targetStandalone
 			if classBody {
-				allowed = targetClassLevel | targetStandalone
+				allowed := targetClassLevel | targetStandalone
 				if scriptHeadOpen {
 					allowed |= targetScript
 				}
-			}
-			if err := p.checkAnnotation(annotation, allowed); err != nil {
+				if err := p.checkAnnotation(annotation, allowed); err != nil {
+					return nil, err
+				}
+			} else if err := p.checkStatementAnnotation(annotation); err != nil {
 				return nil, err
 			}
 			if decoratesNothing(annotation.Name) {
@@ -636,11 +637,11 @@ func (p *parser) parseAnnotationOnlyBlock(headerComments []ast.Statement, colon 
 		return nil, token.Position{}, err
 	}
 	annotation := statement.(*ast.Annotation)
-	allowed := targetStatement | targetStandalone
 	if classBody {
-		allowed = targetClassLevel | targetStandalone
-	}
-	if err := p.checkAnnotation(annotation, allowed); err != nil {
+		if err := p.checkAnnotation(annotation, targetClassLevel|targetStandalone); err != nil {
+			return nil, token.Position{}, err
+		}
+	} else if err := p.checkStatementAnnotation(annotation); err != nil {
 		return nil, token.Position{}, err
 	}
 	standalone := decoratesNothing(annotation.Name)
