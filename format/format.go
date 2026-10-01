@@ -690,7 +690,11 @@ func (p *printer) parameter(parameter ast.Parameter) doc {
 	if parameter.Default == nil {
 		return text(header)
 	}
-	return concat(text(header+" = "), p.expression(parameter.Default, 0))
+	operator := " = "
+	if parameter.Inferred {
+		operator = " := "
+	}
+	return concat(text(header+operator), p.expression(parameter.Default, 0))
 }
 
 // parenthesizedChain renders a chain of binary operators inside the parentheses

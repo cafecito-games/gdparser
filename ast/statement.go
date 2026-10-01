@@ -155,6 +155,10 @@ type Parameter struct {
 	TypeSpan            token.Span `json:"type_span,omitempty"`
 	Default             Expression `json:"default,omitempty"`
 	DefaultOperatorSpan token.Span `json:"default_operator_span,omitempty"`
+	// Inferred reports that the default was written with ":=", which gives the
+	// parameter the type of its default value, rather than with "=", which
+	// leaves it untyped.
+	Inferred bool `json:"inferred,omitempty"`
 	// Variadic reports a rest parameter, written "...name", which collects the
 	// arguments that follow the parameters before it. It may only be the last
 	// parameter of a function or a lambda.
