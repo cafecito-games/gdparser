@@ -423,6 +423,16 @@ func endsLine(typ token.Type) bool {
 	return typ == token.Newline || typ == token.Indent || typ == token.Dedent
 }
 
+// peekPastComments returns the first token that is not part of the comment run
+// at the current position.
+func (p *parser) peekPastComments() token.Token {
+	offset := 0
+	for p.peekN(offset).Type == token.Comment {
+		offset++
+	}
+	return p.peekN(offset)
+}
+
 func commentNode(tok token.Token) *ast.Comment {
 	return &ast.Comment{Base: base(tok.Span), Text: tok.Lexeme, Documentation: len(tok.Lexeme) > 1 && tok.Lexeme[1] == '#'}
 }

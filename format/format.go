@@ -443,10 +443,16 @@ func (p *printer) commentedCollection(shape layout, items []doc, comments []ast.
 		case shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken && !endsWithLineComment(item):
 			parts = append(parts, text(","))
 		}
-		for _, comment := range ast.CollectionCommentsAt(comments, index+1, true) {
-			parts = append(parts, text("  "+p.commentText(comment)))
+		// Only one comment fits at the end of a line: a second would be read as
+		// part of the first, so it takes a line of its own.
+		trailing := ast.CollectionCommentsAt(comments, index+1, true)
+		if len(trailing) > 0 {
+			parts = append(parts, text("  "+p.commentText(trailing[0])))
 		}
 		lines = append(lines, concat(parts...))
+		for _, comment := range trailing[min(1, len(trailing)):] {
+			lines = append(lines, text(p.commentText(comment)))
+		}
 	}
 	for _, comment := range ast.CollectionCommentsAt(comments, len(items), false) {
 		lines = append(lines, text(p.commentText(comment)))
