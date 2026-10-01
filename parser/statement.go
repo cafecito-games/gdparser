@@ -526,9 +526,18 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 			}
 			// "a: = 1" leaves the type to the default, exactly as ":=" does: Godot
 			// has no ":=" token and reads the colon and the "=" separately.
-			inferred := p.at(token.Colon) && p.peekN(1).Type == token.Assign
+			// A comment may break the line between the two.
+			inferred := false
+			if p.at(token.Colon) {
+				offset := 1
+				for p.peekN(offset).Type == token.Comment {
+					offset++
+				}
+				inferred = p.peekN(offset).Type == token.Assign
+			}
 			if inferred {
 				p.advance()
+				p.takeCollectionComments(&interrupting, 0)
 			} else if p.match(token.Colon) {
 				p.takeCollectionComments(&interrupting, 0)
 				parameter.Type, parameter.TypeSpan, err = p.parseType(false, &interrupting, 0)

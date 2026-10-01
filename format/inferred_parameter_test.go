@@ -40,6 +40,17 @@ func TestInferredParameterDefaultWrittenApart(t *testing.T) {
 	}
 }
 
+// A comment may break the line between the colon and the "=".
+func TestInferredParameterDefaultInterruptedByAComment(t *testing.T) {
+	file, err := parser.Parse("infer.gd", []byte("func f(a:  # c\n\t\t= 1):\n\treturn a\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := format.File(file), "func f(\n\t\ta := 1  # c\n):\n\treturn a\n"; got != want {
+		t.Fatalf("formatted %q, want %q", got, want)
+	}
+}
+
 // The tree says which operator a default was written with, so a comparison of
 // two trees that sets spans aside still tells the two programs apart.
 func TestInferredParameterDefaultIsMarkedInTheTree(t *testing.T) {

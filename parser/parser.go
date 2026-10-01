@@ -555,9 +555,6 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 	if p.at(token.Comment) {
 		headerComments = append([]ast.Statement{headerComment(p.advance())}, headerComments...)
 	}
-	for p.at(token.Comment) {
-		headerComments = append(headerComments, commentNode(p.advance()))
-	}
 	if !p.at(token.Newline) {
 		if forLambda && !beginsStatement(p.peek().Type) {
 			// A lambda may carry no body at all, as "func():" written inside an
