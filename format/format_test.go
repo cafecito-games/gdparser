@@ -746,3 +746,31 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 		})
 	}
 }
+
+// A file with carriage-return line endings formats without carrying one into
+// the output, whose lines end with a line feed alone.
+func TestCarriageReturnsLeaveNoTraceInAComment(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"a trailing comment", "var a = 1  # c\r\nvar b = 2\r\n", "var a = 1  # c\nvar b = 2\n"},
+		{"a comment on its own line", "func a():\r\n\t# c\r\n\tpass\r\n", "func a():\n\t# c\n\tpass\n"},
+		{"a comment ending the file", "var a = 1  # c\r\n", "var a = 1  # c\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("crlf.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+			if strings.ContainsRune(formatted, '\r') {
+				t.Errorf("formatted source carries a carriage return: %q", formatted)
+			}
+		})
+	}
+}
