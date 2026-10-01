@@ -620,6 +620,48 @@ func (p *parser) parseClassSuite() ([]ast.Statement, token.Position, error) {
 	return p.parseSuiteFor(false, true)
 }
 
+// parseAnnotationOnlyBlock reads the annotation that is the whole body of a
+// block written on one line, which ends the block. Godot's parse_suite reads it
+// through parse_statement, which puts it on the annotation stack and returns no
+// statement, so the block closes with the annotation already consumed and the
+// keyword that continues the statement around it, such as an "else", is what
+// comes next. An annotation that waits for a declaration leaves the block empty
+// and decorates the first statement the scope around it holds. A standalone one
+// waits for nothing, so it stays where it was written, exactly as it does in a
+// block spelled over several lines; Godot applies it as it reads it and keeps it
+// in no suite at all.
+func (p *parser) parseAnnotationOnlyBlock(headerComments []ast.Statement, colon token.Token, classBody bool) ([]ast.Statement, token.Position, error) {
+	statement, err := p.parseAnnotation()
+	if err != nil {
+		return nil, token.Position{}, err
+	}
+	annotation := statement.(*ast.Annotation)
+	allowed := targetStatement | targetStandalone
+	if classBody {
+		allowed = targetClassLevel | targetStandalone
+	}
+	if err := p.checkAnnotation(annotation, allowed); err != nil {
+		return nil, token.Position{}, err
+	}
+	standalone := decoratesNothing(annotation.Name)
+	if standalone || p.at(token.Newline, token.Comment) {
+		// Godot's parse_annotation consumes the line break after an annotation,
+		// which is optional, and a standalone annotation has to end its line.
+		annotation.OwnLine = true
+		if p.at(token.Comment) {
+			annotation.TrailingComment = commentNode(p.advance())
+		}
+		if _, err := p.expect(token.Newline, "expected end of line after the annotation"); err != nil {
+			return nil, token.Position{}, err
+		}
+	}
+	if standalone {
+		return append(headerComments, annotation), annotation.Span().End, nil
+	}
+	p.leavePendingAnnotations([]*ast.Annotation{annotation}, 0)
+	return headerComments, colon.Span.End, nil
+}
+
 // parseSuiteFor parses the block a colon opens. forLambda marks a lambda body,
 // which ends at the first thing that could not continue it rather than only at a
 // dedent, because the expression the lambda sits in picks up from there.
@@ -661,11 +703,7 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			if forLambda {
 				return nil, token.Position{}, p.error(p.peek(), "a lambda's body cannot begin with an annotation")
 			}
-			// An annotation is no statement of the block it is written in: Godot
-			// holds it for the next declaration and ends a one-line block at
-			// once, so the block is empty and the annotation, with what it
-			// decorates, belongs to the scope around it.
-			return headerComments, colon.Span.End, nil
+			return p.parseAnnotationOnlyBlock(headerComments, colon, classBody)
 		}
 		if classBody && p.at(token.Static) {
 			// "static" alone is the one member a one-line class reads, and Godot
