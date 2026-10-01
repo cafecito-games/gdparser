@@ -563,7 +563,11 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.LambdaExpression:
-		header := concat(text("func"), p.parameterList(node.Parameters, node.ParameterComments))
+		keyword := "func"
+		if node.Name != "" {
+			keyword += " " + node.Name
+		}
+		header := concat(text(keyword), p.parameterList(node.Parameters, node.ParameterComments))
 		if node.ReturnType != "" {
 			header = concat(header, text(" -> "+node.ReturnType))
 		}

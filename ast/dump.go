@@ -45,6 +45,10 @@ func nodeLabel(node Node) string {
 		}
 	case *Identifier:
 		return " " + n.Name
+	case *LambdaExpression:
+		if n.Name != "" {
+			return " " + n.Name
+		}
 	case *Literal:
 		return " " + n.Raw
 	case *Comment:

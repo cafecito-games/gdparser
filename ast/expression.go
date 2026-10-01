@@ -163,6 +163,10 @@ func (*TypeExpression) expression() {}
 // LambdaExpression is an anonymous function expression.
 type LambdaExpression struct {
 	Base
+	// Name is the optional name of the lambda, which Godot reports in a stack
+	// trace. It is empty for an anonymous lambda.
+	Name            string      `json:"name,omitempty"`
+	NameSpan        token.Span  `json:"name_span,omitempty"`
 	Parameters      []Parameter `json:"parameters"`
 	ReturnType      string      `json:"return_type,omitempty"`
 	ReturnTypeSpan  token.Span  `json:"return_type_span,omitempty"`

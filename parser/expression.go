@@ -205,6 +205,17 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 }
 
 func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
+	// A lambda may carry a name, which Godot reports in a stack trace instead
+	// of the anonymous placeholder.
+	name := ""
+	var nameSpan token.Span
+	if !p.at(token.LParen) {
+		named, err := p.expectName("expected lambda name or '(' after func")
+		if err != nil {
+			return nil, err
+		}
+		name, nameSpan = named.Lexeme, named.Span
+	}
 	parameters, parameterComments, err := p.parseParameters()
 	if err != nil {
 		return nil, err
@@ -224,7 +235,8 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		return nil, err
 	}
 	return &ast.LambdaExpression{
-		Base: spanFrom(start.Span.Start, end), Parameters: parameters, ReturnType: returnType,
+		Base: spanFrom(start.Span.Start, end), Name: name, NameSpan: nameSpan,
+		Parameters: parameters, ReturnType: returnType,
 		ReturnTypeSpan: returnTypeSpan, ReturnArrowSpan: returnArrowSpan, KeywordSpan: start.Span,
 		Body: body, Inline: inline, ParameterComments: parameterComments,
 	}, nil

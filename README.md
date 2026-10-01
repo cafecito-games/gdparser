@@ -172,7 +172,8 @@ corpus, including:
   untyped;
 - `if`/`elif`/`else`, `for`, `while`, `match`, `break`, `continue`, `pass`,
   `return`, and `assert`;
-- literals, collections, calls, subscripts, attributes, lambdas, casts,
+- literals, collections, calls, subscripts, attributes, lambdas (including the
+  named form Godot reports in a stack trace), casts,
   conditional expressions, `await`, and `preload`;
 - operators with GDScript precedence and associativity;
 - multiline expressions, escaped identifiers, `$`/`%` node paths, and
