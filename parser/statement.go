@@ -97,7 +97,10 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 		Base: spanFrom(start, name.Span.End), Name: name.Lexeme, NameSpan: name.Span,
 		Constant: constant, Static: static.Type == token.Static, StaticSpan: static.Span, KeywordSpan: keyword.Span,
 	}
-	if p.match(token.Colon) {
+	// A colon that ends the line opens the property accessor block rather than
+	// introducing a type, which is how an untyped property is written.
+	if p.at(token.Colon) && !p.accessorBlockFollows() {
+		p.advance()
 		declaration.Type, declaration.TypeSpan = p.parseTypeUntil(token.Assign, token.InferAssign, token.Colon, token.Newline, token.Comment)
 		if declaration.Type == "" {
 			return nil, p.error(p.peek(), "expected type after ':'")
@@ -131,6 +134,12 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 		declaration.SourceSpan.End = p.previous().Span.End
 	}
 	return declaration, nil
+}
+
+// accessorBlockFollows reports whether the colon the parser is sitting on ends
+// its line, which makes it the colon of a property accessor block.
+func (p *parser) accessorBlockFollows() bool {
+	return p.peekN(1).Type == token.Newline || p.peekN(1).Type == token.Comment
 }
 
 func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) error {

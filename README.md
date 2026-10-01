@@ -168,7 +168,8 @@ The implementation supports the Godot 4 syntax exercised by the compatibility
 corpus, including:
 
 - classes, annotations, signals, enums, variables, constants, and functions;
-- typed declarations, return types, generics, and accessor blocks;
+- typed declarations, return types, generics, and accessor blocks, typed or
+  untyped;
 - `if`/`elif`/`else`, `for`, `while`, `match`, `break`, `continue`, `pass`,
   `return`, and `assert`;
 - literals, collections, calls, subscripts, attributes, lambdas, casts,
