@@ -34,9 +34,31 @@ func (fn inspector) Visit(node Node) Visitor {
 	return nil
 }
 
-// Children returns the direct child nodes of node in source order.
+// Annotations returns the annotations attached to node, in source order, or nil
+// when node is not an annotated declaration.
+func Annotations(node Node) []*Annotation {
+	switch n := node.(type) {
+	case *VariableDeclaration:
+		return n.Annotations
+	case *FunctionDeclaration:
+		return n.Annotations
+	case *ClassDeclaration:
+		return n.Annotations
+	case *SignalDeclaration:
+		return n.Annotations
+	case *EnumDeclaration:
+		return n.Annotations
+	}
+	return nil
+}
+
+// Children returns the direct child nodes of node in source order. Attached
+// annotations come first and an attached trailing comment comes last.
 func Children(node Node) []Node {
 	var out []Node
+	for _, annotation := range Annotations(node) {
+		out = append(out, annotation)
+	}
 	addExpr := func(expr Expression) {
 		if expr != nil {
 			out = append(out, expr)
@@ -142,6 +164,11 @@ func Children(node Node) []Node {
 			}
 			addExpr(matchCase.Guard)
 			addStmts(matchCase.Body)
+		}
+	}
+	if bearer, ok := node.(TriviaBearer); ok {
+		if comment := bearer.StatementTrivia().TrailingComment; comment != nil {
+			out = append(out, comment)
 		}
 	}
 	return out

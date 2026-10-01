@@ -2,6 +2,7 @@
 package lexer
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"unicode"
@@ -18,6 +19,9 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Position, e.Message) }
 
+// byteOrderMark is the UTF-8 encoding of U+FEFF.
+var byteOrderMark = []byte{0xef, 0xbb, 0xbf}
+
 // Lex returns all tokens in source. Indentation is emitted as INDENT and DEDENT.
 func Lex(source []byte) ([]token.Token, error) {
 	l := &lexer{
@@ -26,6 +30,12 @@ func Lex(source []byte) ([]token.Token, error) {
 		column:  1,
 		atStart: true,
 		indents: []int{0},
+	}
+	// A UTF-8 byte order mark carries no syntax. Godot's style guide asks for
+	// files without one, so it is skipped rather than rejected, which lets a
+	// formatter rewrite such a file cleanly.
+	if bytes.HasPrefix(source, byteOrderMark) {
+		l.offset = len(byteOrderMark)
 	}
 	if err := l.run(); err != nil {
 		return nil, err
@@ -73,9 +83,18 @@ func (l *lexer) run() error {
 			l.scanContinuation()
 		case c == '#':
 			l.scanComment(start)
+		case c == 'r' && (l.peekN(1) == '"' || l.peekN(1) == '\''):
+			// A raw string literal, r"...", where backslashes are literal.
+			l.advance()
+			if err := l.scanString(start); err != nil {
+				return err
+			}
 		case isIdentifierStart(c):
 			l.scanIdentifier(start)
 		case isDigit(c):
+			l.scanNumber(start)
+		case c == '.' && isDigit(l.peekN(1)):
+			// A float with its leading zero omitted, as in .5.
 			l.scanNumber(start)
 		case c == '\'' || c == '"':
 			if err := l.scanString(start); err != nil {
@@ -214,7 +233,7 @@ func (l *lexer) scanNumber(start token.Position) {
 
 func (l *lexer) scanString(start token.Position) error {
 	l.atStart = false
-	begin := l.offset
+	begin := start.Offset
 	quote := l.advance()
 	triple := l.peek() == quote && l.peekN(1) == quote
 	if triple {

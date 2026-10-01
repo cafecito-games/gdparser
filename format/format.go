@@ -8,374 +8,693 @@ import (
 	"github.com/cafecito-games/gdparser/ast"
 )
 
-// File formats a parsed or programmatically constructed GDScript file.
-func File(file *ast.File) string {
+// File formats a parsed or programmatically constructed GDScript file using the
+// Godot style guide defaults.
+func File(file *ast.File) string { return FileWithOptions(file, GodotStyle()) }
+
+// FileWithOptions formats file using options. Unset numeric fields fall back to
+// their GodotStyle values, so a partially populated Options inherits the rest of
+// the style guide.
+func FileWithOptions(file *ast.File, options Options) string {
 	if file == nil {
 		return ""
 	}
-	var printer printer
-	printer.statements(file.Statements, 0)
-	return printer.builder.String()
-}
-
-type printer struct{ builder strings.Builder }
-
-func (p *printer) statements(statements []ast.Statement, depth int) {
-	for _, statement := range statements {
-		p.statement(statement, depth)
+	printer := &printer{options: options.normalized()}
+	document := printer.statements(file.Statements)
+	if document == nil {
+		return ""
 	}
+	return render(concat(document, hardLine), printer.options)
 }
 
-func (p *printer) line(depth int, text string) {
-	p.builder.WriteString(strings.Repeat("\t", depth))
-	p.builder.WriteString(text)
-	p.builder.WriteByte('\n')
-}
+type printer struct{ options Options }
 
-func (p *printer) block(body []ast.Statement, depth int) {
-	if len(body) == 0 {
-		p.line(depth, "pass")
-		return
+// statements renders a statement list with the blank lines between its members,
+// and returns nil when the list is empty.
+func (p *printer) statements(list []ast.Statement) doc {
+	if len(list) == 0 {
+		return nil
 	}
-	p.statements(body, depth)
+	gaps := p.blankLineGaps(list)
+	parts := make([]doc, 0, len(list)*2)
+	for index, statement := range list {
+		if index > 0 {
+			for range gaps[index] + 1 {
+				parts = append(parts, hardLine)
+			}
+		}
+		parts = append(parts, p.statement(statement))
+	}
+	return concat(parts...)
 }
 
-func (p *printer) statement(statement ast.Statement, depth int) {
-	switch node := statement.(type) {
-	case *ast.Annotation:
-		text := "@" + node.Name
-		if node.Arguments != nil {
-			args := make([]string, len(node.Arguments))
-			for i, argument := range node.Arguments {
-				args[i] = expressionAt(argument, 0, depth)
-			}
-			text += "(" + strings.Join(args, ", ") + ")"
+// body renders a suite's statements, substituting pass for an empty one.
+func (p *printer) body(list []ast.Statement) doc {
+	if document := p.statements(list); document != nil {
+		return document
+	}
+	return text("pass")
+}
+
+// suite renders an indented block beneath a statement header.
+func (p *printer) suite(list []ast.Statement) doc {
+	return nest(1, concat(hardLine, p.body(list)))
+}
+
+// blankLineGaps returns the number of blank lines to place before each statement
+// in list. Authored blank lines are kept but clamped, and function and class
+// declarations are surrounded by exactly the configured count.
+func (p *printer) blankLineGaps(list []ast.Statement) []int {
+	gaps := make([]int, len(list))
+	for index := 1; index < len(list); index++ {
+		gaps[index] = min(blankLinesBefore(list[index]), p.options.BlankLines.Nested)
+	}
+	for index, statement := range list {
+		if !isMajorDeclaration(statement) {
+			continue
 		}
-		p.line(depth, text)
-	case *ast.Comment:
-		p.line(depth, node.Text)
-	case *ast.Directive:
-		text := node.Name
-		if node.Value != nil {
-			text += " " + expressionAt(node.Value, 0, depth)
+		// A comment run written directly above a declaration documents it, so the
+		// gap belongs before the comments rather than between them and the header.
+		if start := commentRunStart(list, index); start > 0 {
+			gaps[start] = p.options.BlankLines.TopLevel
 		}
-		if node.Extends != nil {
-			text += " extends " + expressionAt(node.Extends, 0, depth)
+		if index+1 < len(list) {
+			gaps[index+1] = p.options.BlankLines.TopLevel
 		}
-		p.line(depth, text)
-	case *ast.ExpressionStatement:
-		p.line(depth, expressionAt(node.Expression, 0, depth))
-	case *ast.VariableDeclaration:
-		keyword := "var"
-		if node.Constant {
-			keyword = "const"
-		}
-		if node.Static {
-			keyword = "static " + keyword
-		}
-		text := keyword + " " + node.Name
-		if node.Type != "" {
-			text += ": " + node.Type
-		}
-		if node.Value != nil {
-			operator := " = "
-			if node.Inferred {
-				operator = " := "
-			}
-			text += operator + expressionAt(node.Value, 0, depth)
-		}
-		if node.Getter == nil && node.Setter == nil {
-			p.line(depth, text)
+	}
+	return gaps
+}
+
+// commentRunStart returns the index of the first comment in the unbroken run of
+// comments directly above the statement at index.
+func commentRunStart(list []ast.Statement, index int) int {
+	start := index
+	for start > 0 {
+		if _, ok := list[start-1].(*ast.Comment); !ok {
 			break
 		}
-		p.line(depth, text+":")
-		if node.Getter != nil {
-			p.line(depth+1, "get:")
-			p.block(node.Getter, depth+2)
+		if blankLinesBefore(list[start]) != 0 {
+			break
 		}
-		if node.Setter != nil {
-			p.line(depth+1, "set("+node.Setter.Parameter+"):")
-			p.block(node.Setter.Body, depth+2)
+		start--
+	}
+	return start
+}
+
+func blankLinesBefore(statement ast.Statement) int {
+	if trivia := ast.TriviaOf(statement); trivia != nil {
+		return trivia.BlankLinesBefore
+	}
+	return 0
+}
+
+// isMajorDeclaration reports whether the style guide requires blank lines around
+// statement. Functions and inner classes are only ever declared as members, so
+// the rule applies at every depth.
+func isMajorDeclaration(statement ast.Statement) bool {
+	switch statement.(type) {
+	case *ast.FunctionDeclaration, *ast.ClassDeclaration:
+		return true
+	}
+	return false
+}
+
+// statement renders one statement with its annotations and trailing comment.
+func (p *printer) statement(statement ast.Statement) doc {
+	var parts []doc
+	for _, annotation := range ast.Annotations(statement) {
+		parts = append(parts, p.annotation(annotation))
+		if annotation.OwnLine {
+			parts = append(parts, hardLine)
+			continue
 		}
-	case *ast.Assignment:
-		p.line(depth, expressionAt(node.Target, 0, depth)+" "+node.Operator+" "+expressionAt(node.Value, 0, depth))
-	case *ast.ReturnStatement:
-		text := "return"
+		parts = append(parts, text(" "))
+	}
+	parts = append(parts, p.statementBody(statement))
+	if trivia := ast.TriviaOf(statement); trivia != nil && trivia.TrailingComment != nil {
+		parts = append(parts, text("  "+p.commentText(trivia.TrailingComment)))
+	}
+	return concat(parts...)
+}
+
+func (p *printer) annotation(node *ast.Annotation) doc {
+	document := doc(text("@" + node.Name))
+	if node.Arguments != nil {
+		arguments := make([]doc, len(node.Arguments))
+		for index, argument := range node.Arguments {
+			arguments[index] = p.expression(argument, 0)
+		}
+		document = concat(document, p.collection(argumentLayout, arguments))
+	}
+	if node.TrailingComment != nil {
+		document = concat(document, text("  "+p.commentText(node.TrailingComment)))
+	}
+	return document
+}
+
+func (p *printer) statementBody(statement ast.Statement) doc {
+	switch node := statement.(type) {
+	case *ast.Annotation:
+		return p.annotation(node)
+	case *ast.Comment:
+		return text(p.commentText(node))
+	case *ast.Directive:
+		parts := []doc{text(node.Name)}
 		if node.Value != nil {
-			text += " " + expressionAt(node.Value, 0, depth)
+			parts = append(parts, text(" "), p.expression(node.Value, 0))
 		}
-		p.line(depth, text)
+		if node.Extends != nil {
+			parts = append(parts, text(" extends "), p.expression(node.Extends, 0))
+		}
+		return concat(parts...)
+	case *ast.ExpressionStatement:
+		return p.expression(node.Expression, 0)
+	case *ast.VariableDeclaration:
+		return p.variable(node)
+	case *ast.Assignment:
+		return concat(p.expression(node.Target, 0), text(" "+node.Operator+" "), p.expression(node.Value, 0))
+	case *ast.ReturnStatement:
+		if node.Value == nil {
+			return text("return")
+		}
+		return concat(text("return "), p.expression(node.Value, 0))
 	case *ast.KeywordStatement:
-		p.line(depth, node.Keyword)
+		return text(node.Keyword)
 	case *ast.FunctionDeclaration:
-		prefix := "func "
-		if node.Static {
-			prefix = "static func "
-		}
-		params := make([]string, len(node.Parameters))
-		for i, parameter := range node.Parameters {
-			params[i] = formatParameterAt(parameter, depth)
-		}
-		text := prefix + node.Name + "(" + strings.Join(params, ", ") + ")"
-		if node.ReturnType != "" {
-			text += " -> " + node.ReturnType
-		}
-		if node.Abstract {
-			p.line(depth, text)
-		} else {
-			p.line(depth, text+":")
-			p.block(node.Body, depth+1)
-		}
+		return p.function(node)
 	case *ast.ClassDeclaration:
-		text := "class " + node.Name
+		header := "class " + node.Name
 		if node.Extends != "" {
-			text += " extends " + node.Extends
+			header += " extends " + node.Extends
 		}
-		p.line(depth, text+":")
-		p.block(node.Body, depth+1)
+		return concat(text(header+":"), p.suite(node.Body))
 	case *ast.SignalDeclaration:
-		params := make([]string, len(node.Parameters))
-		for i, parameter := range node.Parameters {
-			params[i] = formatParameterAt(parameter, depth)
-		}
-		text := "signal " + node.Name
+		document := doc(text("signal " + node.Name))
 		if node.Parameters != nil {
-			text += "(" + strings.Join(params, ", ") + ")"
+			document = concat(document, p.parameterList(node.Parameters))
 		}
-		p.line(depth, text)
+		return document
 	case *ast.EnumDeclaration:
-		text := "enum"
-		if node.Name != "" {
-			text += " " + node.Name
-		}
-		if enumHasComments(node) {
-			p.line(depth, text+" {")
-			for _, member := range node.Members {
-				for _, comment := range member.Comments {
-					p.line(depth+1, comment.Text)
-				}
-				memberText := member.Name
-				if member.Value != nil {
-					memberText += " = " + expressionAt(member.Value, 0, depth+1)
-				}
-				p.line(depth+1, memberText+",")
-			}
-			p.line(depth, "}")
-		} else {
-			members := make([]string, len(node.Members))
-			for i, member := range node.Members {
-				members[i] = member.Name
-				if member.Value != nil {
-					members[i] += " = " + expressionAt(member.Value, 0, depth)
-				}
-			}
-			p.line(depth, text+" { "+strings.Join(members, ", ")+" }")
-		}
+		return p.enum(node)
 	case *ast.IfStatement:
-		for i, branch := range node.Branches {
-			keyword := "if"
-			if i > 0 {
-				keyword = "elif"
+		var parts []doc
+		for index, branch := range node.Branches {
+			keyword := "if "
+			if index > 0 {
+				parts = append(parts, hardLine)
+				keyword = "elif "
 			}
-			p.line(depth, keyword+" "+expressionAt(branch.Condition, 0, depth)+":")
-			p.block(branch.Body, depth+1)
+			parts = append(parts, text(keyword), p.expression(branch.Condition, 0), text(":"), p.suite(branch.Body))
 		}
 		if node.Else != nil {
-			p.line(depth, "else:")
-			p.block(node.Else, depth+1)
+			parts = append(parts, hardLine, text("else:"), p.suite(node.Else))
 		}
+		return concat(parts...)
 	case *ast.WhileStatement:
-		p.line(depth, "while "+expressionAt(node.Condition, 0, depth)+":")
-		p.block(node.Body, depth+1)
+		return concat(text("while "), p.expression(node.Condition, 0), text(":"), p.suite(node.Body))
 	case *ast.ForStatement:
 		variable := node.Variable
 		if node.Type != "" {
 			variable += ": " + node.Type
 		}
-		p.line(depth, "for "+variable+" in "+expressionAt(node.Iterable, 0, depth)+":")
-		p.block(node.Body, depth+1)
+		return concat(text("for "+variable+" in "), p.expression(node.Iterable, 0), text(":"), p.suite(node.Body))
 	case *ast.MatchStatement:
-		p.line(depth, "match "+expressionAt(node.Value, 0, depth)+":")
-		for _, matchCase := range node.Cases {
-			patterns := make([]string, len(matchCase.Patterns))
-			for i, pattern := range matchCase.Patterns {
-				patterns[i] = expressionAt(pattern, 0, depth+1)
-			}
-			text := strings.Join(patterns, ", ")
-			if matchCase.Guard != nil {
-				text += " when " + expressionAt(matchCase.Guard, 0, depth+1)
-			}
-			p.line(depth+1, text+":")
-			p.block(matchCase.Body, depth+2)
+		parts := []doc{text("match "), p.expression(node.Value, 0), text(":")}
+		cases := make([]doc, len(node.Cases))
+		for index, matchCase := range node.Cases {
+			cases[index] = p.matchCase(matchCase)
 		}
+		return concat(concat(parts...), nest(1, concat(hardLine, join(hardLine, cases))))
+	default:
+		panic(fmt.Sprintf("format: unsupported statement %T", statement))
 	}
 }
 
-func formatParameterAt(parameter ast.Parameter, depth int) string {
-	text := parameter.Name
+func (p *printer) variable(node *ast.VariableDeclaration) doc {
+	keyword := "var"
+	if node.Constant {
+		keyword = "const"
+	}
+	if node.Static {
+		keyword = "static " + keyword
+	}
+	parts := []doc{text(keyword + " " + node.Name)}
+	if node.Type != "" {
+		parts = append(parts, text(": "+node.Type))
+	}
+	if node.Value != nil {
+		operator := " = "
+		if node.Inferred {
+			operator = " := "
+		}
+		parts = append(parts, text(operator), p.expression(node.Value, 0))
+	}
+	header := concat(parts...)
+	if node.Getter == nil && node.Setter == nil {
+		return header
+	}
+	var accessors []doc
+	if node.Getter != nil {
+		accessors = append(accessors, hardLine, text("get:"), p.suite(node.Getter))
+	}
+	if node.Setter != nil {
+		accessors = append(accessors, hardLine, text("set("+node.Setter.Parameter+"):"), p.suite(node.Setter.Body))
+	}
+	return concat(header, text(":"), nest(1, concat(accessors...)))
+}
+
+func (p *printer) function(node *ast.FunctionDeclaration) doc {
+	prefix := "func "
+	if node.Static {
+		prefix = "static func "
+	}
+	header := concat(text(prefix+node.Name), p.parameterList(node.Parameters))
+	if node.ReturnType != "" {
+		header = concat(header, text(" -> "+node.ReturnType))
+	}
+	if node.Abstract {
+		return header
+	}
+	return concat(header, text(":"), p.suite(node.Body))
+}
+
+func (p *printer) enum(node *ast.EnumDeclaration) doc {
+	header := "enum"
+	if node.Name != "" {
+		header += " " + node.Name
+	}
+	members := make([]doc, len(node.Members))
+	for index, member := range node.Members {
+		var parts []doc
+		for _, comment := range member.Comments {
+			parts = append(parts, text(p.commentText(comment)), hardLine)
+		}
+		memberText := member.Name
+		if member.Value != nil {
+			parts = append(parts, text(memberText+" = "), p.expression(member.Value, 0))
+		} else {
+			parts = append(parts, text(memberText))
+		}
+		members[index] = concat(parts...)
+	}
+	return concat(text(header+" "), p.collection(enumLayout, members))
+}
+
+func (p *printer) matchCase(matchCase ast.MatchCase) doc {
+	patterns := make([]doc, len(matchCase.Patterns))
+	for index, pattern := range matchCase.Patterns {
+		patterns[index] = p.expression(pattern, 0)
+	}
+	header := join(text(", "), patterns)
+	if matchCase.Guard != nil {
+		header = concat(header, text(" when "), p.expression(matchCase.Guard, 0))
+	}
+	return concat(header, text(":"), p.suite(matchCase.Body))
+}
+
+// layout describes how a bracketed construct is broken across lines.
+type layout struct {
+	open  string
+	close string
+	// levels is the continuation indentation. The style guide asks for two
+	// levels, and one inside arrays, dictionaries, and enums.
+	levels int
+	// trailingComma appends a comma after the last element when broken, which
+	// the style guide asks for in arrays, dictionaries, and enums only.
+	trailingComma bool
+	// padFlat adds a space inside the braces of a single-line declaration, which
+	// the style guide asks for in dictionaries.
+	padFlat bool
+}
+
+var (
+	argumentLayout   = layout{open: "(", close: ")", levels: 2}
+	arrayLayout      = layout{open: "[", close: "]", levels: 1, trailingComma: true}
+	dictionaryLayout = layout{open: "{", close: "}", levels: 1, trailingComma: true, padFlat: true}
+	enumLayout       = layout{open: "{", close: "}", levels: 1, trailingComma: true, padFlat: true}
+)
+
+// collection renders items inside brackets, on one line when they fit and one
+// per line otherwise.
+func (p *printer) collection(shape layout, items []doc) doc {
+	if len(items) == 0 {
+		return text(shape.open + shape.close)
+	}
+	var tail doc
+	if shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken {
+		tail = ifBroken(text(","), text(""))
+	}
+	pad := doc(text(""))
+	if shape.padFlat {
+		pad = ifBroken(text(""), text(" "))
+	}
+	return group(concat(
+		text(shape.open),
+		pad,
+		nest(shape.levels, concat(softLine, join(concat(text(","), spaceLine), items), tail)),
+		softLine,
+		pad,
+		text(shape.close),
+	))
+}
+
+func (p *printer) parameterList(parameters []ast.Parameter) doc {
+	items := make([]doc, len(parameters))
+	for index, parameter := range parameters {
+		items[index] = p.parameter(parameter)
+	}
+	return p.collection(argumentLayout, items)
+}
+
+func (p *printer) parameter(parameter ast.Parameter) doc {
+	header := parameter.Name
 	if parameter.Type != "" {
-		text += ": " + parameter.Type
+		header += ": " + parameter.Type
 	}
-	if parameter.Default != nil {
-		text += " = " + expressionAt(parameter.Default, 0, depth)
+	if parameter.Default == nil {
+		return text(header)
 	}
-	return text
+	return concat(text(header+" = "), p.expression(parameter.Default, 0))
 }
 
-func enumHasComments(node *ast.EnumDeclaration) bool {
-	for _, member := range node.Members {
-		if len(member.Comments) > 0 {
-			return true
-		}
+// logicalChain renders a chain of one logical operator, breaking before each
+// keyword so that and/or starts its continuation line. A logical expression can
+// only continue across lines inside parentheses, so breaking always adds them
+// when precedence has not already required them.
+func (p *printer) logicalChain(binary *ast.BinaryExpression, parenthesize bool) doc {
+	body := nest(2, concat(softLine, concat(p.logicalParts(binary)...)))
+	if parenthesize {
+		return group(concat(text("("), body, softLine, text(")")))
 	}
-	return false
+	return group(concat(
+		ifBroken(text("("), text("")),
+		body,
+		softLine,
+		ifBroken(text(")"), text("")),
+	))
 }
 
-func expression(expr ast.Expression, parentPrecedence int) string {
-	return expressionAt(expr, parentPrecedence, 0)
+// logicalParts flattens a chain of one logical operator into operands separated
+// by breakable operator keywords.
+func (p *printer) logicalParts(binary *ast.BinaryExpression) []doc {
+	operator := p.operatorText(binary.Operator)
+	precedence := operatorPrecedence(operator)
+	var parts []doc
+	if left, ok := binary.Left.(*ast.BinaryExpression); ok && p.operatorText(left.Operator) == operator {
+		parts = p.logicalParts(left)
+	} else {
+		parts = append(parts, p.expression(binary.Left, precedence))
+	}
+	return append(parts, spaceLine, text(operator+" "), p.expression(binary.Right, precedence+1))
 }
 
-func expressionAt(expr ast.Expression, parentPrecedence, depth int) string {
+func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 	if expr == nil {
-		return ""
+		return text("")
 	}
 	switch node := expr.(type) {
 	case *ast.Identifier:
-		return node.Name
+		return text(node.Name)
 	case *ast.TypeExpression:
-		return node.Name
+		return text(node.Name)
 	case *ast.Literal:
-		return node.Raw
+		return text(p.literal(node))
 	case *ast.NodePathExpression:
 		prefix := "$"
 		if node.Unique {
 			prefix = "%"
 		}
-		return prefix + node.Path
+		return text(prefix + node.Path)
 	case *ast.UnaryExpression:
-		operator := node.Operator
+		operator := p.operatorText(node.Operator)
 		operandPrecedence := 11
-		if operator == "not" || operator == "await" {
-			operator += " "
-		}
-		if node.Operator == "not" {
+		if operator == "not" {
 			operandPrecedence = 3
 		}
-		text := operator + expressionAt(node.Operand, operandPrecedence, depth)
-		if node.Operator == "not" && parentPrecedence >= 3 {
-			return "(" + text + ")"
+		spelled := operator
+		if operator == "not" || operator == "await" {
+			spelled += " "
+		}
+		inner := concat(text(spelled), p.expression(node.Operand, operandPrecedence))
+		if operator == "not" && parentPrecedence >= 3 {
+			return parenthesized(inner)
 		}
 		if 11 < parentPrecedence {
-			return "(" + text + ")"
+			return parenthesized(inner)
 		}
-		return text
+		return inner
 	case *ast.BinaryExpression:
-		precedence := operatorPrecedence(node.Operator)
+		operator := p.operatorText(node.Operator)
+		precedence := operatorPrecedence(operator)
 		leftPrecedence, rightPrecedence := precedence, precedence+1
-		if node.Operator == "**" {
+		if operator == "**" {
 			leftPrecedence, rightPrecedence = precedence+1, precedence
 		}
-		text := expressionAt(node.Left, leftPrecedence, depth) + " " + node.Operator + " " + expressionAt(node.Right, rightPrecedence, depth)
+		if isLogicalOperator(operator) {
+			return p.logicalChain(node, precedence < parentPrecedence)
+		}
+		inner := concat(
+			p.expression(node.Left, leftPrecedence),
+			text(" "+operator+" "),
+			p.expression(node.Right, rightPrecedence),
+		)
 		if precedence < parentPrecedence {
-			return "(" + text + ")"
+			return parenthesized(inner)
 		}
-		return text
+		return inner
 	case *ast.TernaryExpression:
-		text := expressionAt(node.Value, 1, depth) + " if " + expressionAt(node.Condition, 1, depth) + " else " + expressionAt(node.Alternative, 1, depth)
+		inner := concat(
+			p.expression(node.Value, 1), text(" if "),
+			p.expression(node.Condition, 1), text(" else "),
+			p.expression(node.Alternative, 1),
+		)
 		if parentPrecedence > 0 {
-			return "(" + text + ")"
+			return parenthesized(inner)
 		}
-		return text
+		return inner
 	case *ast.CallExpression:
-		arguments := make([]string, len(node.Arguments))
-		for i, argument := range node.Arguments {
-			arguments[i] = expressionAt(argument, 0, depth)
+		arguments := make([]doc, len(node.Arguments))
+		for index, argument := range node.Arguments {
+			arguments[index] = p.expression(argument, 0)
 		}
-		return expressionAt(node.Callee, 12, depth) + "(" + strings.Join(arguments, ", ") + ")"
+		return concat(p.expression(node.Callee, 12), p.collection(argumentLayout, arguments))
 	case *ast.MemberExpression:
-		return expressionAt(node.Object, 12, depth) + "." + node.Property
+		return concat(p.expression(node.Object, 12), text("."+node.Property))
 	case *ast.SubscriptExpression:
-		return expressionAt(node.Object, 12, depth) + "[" + expressionAt(node.Index, 0, depth) + "]"
+		return concat(p.expression(node.Object, 12), text("["), p.expression(node.Index, 0), text("]"))
 	case *ast.ArrayLiteral:
-		elements := make([]string, len(node.Elements))
-		for i, element := range node.Elements {
-			elements[i] = expressionAt(element, 0, depth)
+		elements := make([]doc, len(node.Elements))
+		for index, element := range node.Elements {
+			elements[index] = p.expression(element, 0)
 		}
-		return "[" + strings.Join(elements, ", ") + "]"
+		return p.collection(arrayLayout, elements)
 	case *ast.DictionaryLiteral:
-		entries := make([]string, len(node.Entries))
-		for i, entry := range node.Entries {
-			entries[i] = expressionAt(entry.Key, 0, depth) + ": " + expressionAt(entry.Value, 0, depth)
+		entries := make([]doc, len(node.Entries))
+		for index, entry := range node.Entries {
+			entries[index] = concat(p.expression(entry.Key, 0), text(": "), p.expression(entry.Value, 0))
 		}
-		return "{" + strings.Join(entries, ", ") + "}"
+		return p.collection(dictionaryLayout, entries)
 	case *ast.LambdaExpression:
-		parameters := make([]string, len(node.Parameters))
-		for i, parameter := range node.Parameters {
-			parameters[i] = formatParameterAt(parameter, depth)
-		}
-		text := "func(" + strings.Join(parameters, ", ") + ")"
+		header := concat(text("func"), p.parameterList(node.Parameters))
 		if node.ReturnType != "" {
-			text += " -> " + node.ReturnType
+			header = concat(header, text(" -> "+node.ReturnType))
 		}
-		if !node.Inline {
-			var bodyPrinter printer
-			bodyPrinter.block(node.Body, depth+1)
-			result := text + ":\n" + bodyPrinter.builder.String() + strings.Repeat("\t", depth)
-			if parentPrecedence > 0 {
-				return "(" + result + ")"
+		var inner doc
+		if node.Inline {
+			statements := make([]doc, len(node.Body))
+			for index, statement := range node.Body {
+				statements[index] = p.inlineStatement(statement)
 			}
-			return result
+			inner = concat(header, text(": "), join(text("; "), statements))
+		} else {
+			inner = concat(header, text(":"), p.suite(node.Body))
 		}
-		body := make([]string, len(node.Body))
-		for i, statement := range node.Body {
-			body[i] = inlineStatement(statement)
-		}
-		result := text + ": " + strings.Join(body, "; ")
 		if parentPrecedence > 0 {
-			return "(" + result + ")"
+			return parenthesized(inner)
 		}
-		return result
+		return inner
 	default:
 		panic(fmt.Sprintf("format: unsupported expression %T", expr))
 	}
 }
 
-func inlineStatement(statement ast.Statement) string {
-	switch node := statement.(type) {
-	case *ast.ExpressionStatement:
-		return expression(node.Expression, 0)
-	case *ast.Assignment:
-		return expression(node.Target, 0) + " " + node.Operator + " " + expression(node.Value, 0)
-	case *ast.ReturnStatement:
-		if node.Value == nil {
-			return "return"
-		}
-		return "return " + expression(node.Value, 0)
-	case *ast.KeywordStatement:
-		return node.Keyword
-	case *ast.VariableDeclaration:
-		keyword := "var"
-		if node.Constant {
-			keyword = "const"
-		}
-		text := keyword + " " + node.Name
-		if node.Type != "" {
-			text += ": " + node.Type
-		}
-		if node.Value != nil {
-			text += " = " + expression(node.Value, 0)
-		}
-		return text
+// inlineStatement renders a statement inside a single-line lambda body.
+func (p *printer) inlineStatement(statement ast.Statement) doc {
+	switch statement.(type) {
+	case *ast.ExpressionStatement, *ast.Assignment, *ast.ReturnStatement,
+		*ast.KeywordStatement, *ast.VariableDeclaration:
+		return p.statementBody(statement)
 	default:
 		panic(fmt.Sprintf("format: unsupported inline statement %T", statement))
 	}
 }
 
+func parenthesized(inner doc) doc { return group(concat(text("("), inner, text(")"))) }
+
+func isLogicalOperator(operator string) bool {
+	switch operator {
+	case "and", "or", "&&", "||":
+		return true
+	}
+	return false
+}
+
+// operatorText returns the spelling of operator, preferring the style guide's
+// plain English boolean operators.
+func (p *printer) operatorText(operator string) string {
+	if p.options.Operators != WordOperators {
+		return operator
+	}
+	switch operator {
+	case "&&":
+		return "and"
+	case "||":
+		return "or"
+	case "!":
+		return "not"
+	}
+	return operator
+}
+
+func (p *printer) literal(node *ast.Literal) string {
+	switch node.Kind {
+	case ast.IntegerLiteral, ast.FloatLiteral:
+		if p.options.Numbers == NormalizeNumbers {
+			return normalizeNumber(node.Raw)
+		}
+	case ast.StringLiteral, ast.StringNameLiteral, ast.NodePathLiteral:
+		return p.requote(node)
+	}
+	return node.Raw
+}
+
+// normalizeNumber restores omitted zeros in a float and lowercases a radix
+// prefix and its digits. Digit separators are never added or removed.
+func normalizeNumber(raw string) string {
+	if len(raw) > 1 && raw[0] == '0' {
+		switch raw[1] {
+		case 'x', 'X', 'b', 'B':
+			return "0" + strings.ToLower(raw[1:])
+		}
+	}
+	mantissa, exponent := raw, ""
+	if index := strings.IndexAny(raw, "eE"); index >= 0 {
+		mantissa, exponent = raw[:index], raw[index:]
+	}
+	if strings.HasPrefix(mantissa, ".") {
+		mantissa = "0" + mantissa
+	}
+	if strings.HasSuffix(mantissa, ".") {
+		mantissa += "0"
+	}
+	return mantissa + exponent
+}
+
+// requote rewrites a string literal to the quote character that needs the fewest
+// escapes, preferring the configured style when either works. The value of the
+// string is never changed.
+func (p *printer) requote(node *ast.Literal) string {
+	if p.options.QuoteStyle == PreserveQuotes || node.Triple || node.Quote == 0 {
+		return node.Raw
+	}
+	open := strings.IndexByte(node.Raw, node.Quote)
+	if open < 0 || len(node.Raw) < open+2 {
+		return node.Raw
+	}
+	prefix, body := node.Raw[:open], node.Raw[open+1:len(node.Raw)-1]
+	preferred, alternate := byte('"'), byte('\'')
+	if p.options.QuoteStyle == SingleQuotes {
+		preferred, alternate = alternate, preferred
+	}
+	if node.RawPrefix {
+		// A raw literal has no escapes, so its quote character must not appear in
+		// the body at all.
+		switch {
+		case !strings.Contains(body, string(preferred)):
+			return prefix + string(preferred) + body + string(preferred)
+		case !strings.Contains(body, string(alternate)):
+			return prefix + string(alternate) + body + string(alternate)
+		default:
+			return node.Raw
+		}
+	}
+	atoms := splitEscapes(body)
+	quote := preferred
+	if countLiteral(atoms, preferred) > 0 && countLiteral(atoms, alternate) == 0 {
+		quote = alternate
+	}
+	return prefix + string(quote) + encodeString(atoms, quote) + string(quote)
+}
+
+// splitEscapes splits a string literal body into atoms, reducing an escaped
+// quote to the bare character it stands for so that the choice of delimiter can
+// be made independently of how the source happened to escape it.
+func splitEscapes(body string) []string {
+	atoms := make([]string, 0, len(body))
+	for index := 0; index < len(body); index++ {
+		if body[index] != '\\' || index+1 >= len(body) {
+			atoms = append(atoms, body[index:index+1])
+			continue
+		}
+		if next := body[index+1]; next == '"' || next == '\'' {
+			atoms = append(atoms, string(next))
+		} else {
+			atoms = append(atoms, body[index:index+2])
+		}
+		index++
+	}
+	return atoms
+}
+
+// countLiteral returns how many atoms are an unescaped occurrence of target.
+func countLiteral(atoms []string, target byte) int {
+	count := 0
+	for _, atom := range atoms {
+		if len(atom) == 1 && atom[0] == target {
+			count++
+		}
+	}
+	return count
+}
+
+// encodeString reassembles atoms into a body delimited by quote, escaping only
+// the delimiter itself.
+func encodeString(atoms []string, quote byte) string {
+	var builder strings.Builder
+	for _, atom := range atoms {
+		if len(atom) == 1 && atom[0] == quote {
+			builder.WriteByte('\\')
+		}
+		builder.WriteString(atom)
+	}
+	return builder.String()
+}
+
+// commentText returns the comment's source text with one space after its marker.
+// Region markers are left alone, since the style guide requires no space there.
+func (p *printer) commentText(comment *ast.Comment) string {
+	raw := comment.Text
+	if p.options.CommentSpacing != NormalizeComments || !strings.HasPrefix(raw, "#") {
+		return raw
+	}
+	marker, body := "#", raw[1:]
+	if strings.HasPrefix(body, "#") {
+		marker, body = "##", body[1:]
+	}
+	if strings.HasPrefix(body, "region") || strings.HasPrefix(body, "endregion") {
+		return raw
+	}
+	if body == "" || strings.HasPrefix(body, " ") {
+		return raw
+	}
+	return marker + " " + body
+}
+
 func operatorPrecedence(operator string) int {
 	switch operator {
-	case "or":
+	case "or", "||":
 		return 1
-	case "and":
+	case "and", "&&":
 		return 2
 	case "==", "!=", "<", "<=", ">", ">=", "in", "not in", "is", "is not", "as":
 		return 3

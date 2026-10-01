@@ -56,11 +56,23 @@ func TestCorpus(t *testing.T) {
 				t.Errorf("parse %s: %v", path, parseErr)
 				return nil
 			}
-			second, parseErr := gdparser.ParseFile(path, []byte(gdparser.Format(first)))
+			formatted := gdparser.Format(first)
+			second, parseErr := gdparser.ParseFile(path, []byte(formatted))
 			if parseErr != nil {
 				t.Errorf("reparse %s: %v", path, parseErr)
 				return nil
 			}
+			if again := gdparser.Format(second); again != formatted {
+				t.Errorf("formatting is not idempotent for %s", path)
+			}
+			for index, line := range strings.Split(strings.TrimRight(formatted, "\n"), "\n") {
+				if strings.TrimRight(line, " \t") != line {
+					t.Errorf("%s:%d formatted with trailing whitespace", path, index+1)
+					break
+				}
+			}
+			canonicalizeFormatting(first)
+			canonicalizeFormatting(second)
 			firstValue = normalizedJSON(first, true)
 			secondValue = normalizedJSON(second, true)
 		case extension == ".tscn", extension == ".tres", extension == ".escn":
@@ -143,10 +155,52 @@ func normalizedJSON(node ast.Node, root bool) any {
 	return normalizeValue(ast.JSONValue(node), root)
 }
 
+// canonicalizeFormatting rewrites the spellings that canonical formatting is
+// defined to normalize: literal spelling, comment spacing, and the boolean
+// operators. Comparing the source spelling would report each of those as lost
+// structure. Comparing the canonical spelling still fails when formatting changes
+// the literal, comment, or operator itself.
+func canonicalizeFormatting(file *ast.File) {
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch current := node.(type) {
+		case *ast.Literal:
+			current.Raw = canonicalStatement(&ast.ExpressionStatement{Expression: current})
+			current.Quote, current.Triple, current.RawPrefix = 0, false, false
+		case *ast.Comment:
+			current.Text = canonicalStatement(&ast.Comment{Text: current.Text})
+		case *ast.BinaryExpression:
+			current.Operator = wordOperator(current.Operator)
+		case *ast.UnaryExpression:
+			current.Operator = wordOperator(current.Operator)
+		}
+		return true
+	})
+}
+
+// canonicalStatement returns the single line the formatter emits for statement.
+func canonicalStatement(statement ast.Statement) string {
+	formatted := gdparser.Format(&ast.File{Statements: []ast.Statement{statement}})
+	return strings.TrimSuffix(formatted, "\n")
+}
+
+// wordOperator is the style guide's plain English spelling of a boolean operator.
+func wordOperator(operator string) string {
+	switch operator {
+	case "&&":
+		return "and"
+	case "||":
+		return "or"
+	case "!":
+		return "not"
+	}
+	return operator
+}
+
 func TestNormalizeValueIgnoresSourceMetadata(t *testing.T) {
 	value := map[string]any{
-		"span":         map[string]any{"start": 1},
-		"keyword_span": map[string]any{"start": 2},
+		"span":               map[string]any{"start": 1},
+		"keyword_span":       map[string]any{"start": 2},
+		"blank_lines_before": 2,
 		"child": map[string]any{
 			"name":      "semantic",
 			"name_span": map[string]any{"start": 3},
@@ -165,7 +219,7 @@ func normalizeValue(value any, root bool) any {
 			delete(current, "name")
 		}
 		for key, child := range current {
-			if key == "span" || strings.HasSuffix(key, "_span") {
+			if key == "span" || strings.HasSuffix(key, "_span") || key == "blank_lines_before" {
 				delete(current, key)
 				continue
 			}

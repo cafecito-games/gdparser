@@ -59,3 +59,69 @@ func TestLexContinuedExpressionDoesNotCreateIndent(t *testing.T) {
 		}
 	}
 }
+
+func TestLexSkipsByteOrderMark(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("\xef\xbb\xbfpass\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[0].Type != token.Pass {
+		t.Fatalf("first token = %s, want %s", tokens[0].Type, token.Pass)
+	}
+	// The mark occupies no column, so the statement still starts the line.
+	if start := tokens[0].Span.Start; start.Line != 1 || start.Column != 1 {
+		t.Fatalf("first token at %d:%d, want 1:1", start.Line, start.Column)
+	}
+}
+
+func TestLexRawStringKeepsItsPrefix(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var a = r\"\\d+\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *token.Token
+	for index := range tokens {
+		if tokens[index].Type == token.String {
+			found = &tokens[index]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("no string token")
+	}
+	if found.Lexeme != `r"\d+"` {
+		t.Fatalf("lexeme = %s, want %s", found.Lexeme, `r"\d+"`)
+	}
+}
+
+// An identifier beginning with r is not mistaken for a raw string prefix.
+func TestLexIdentifierStartingWithR(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var radius = 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[1].Type != token.Identifier || tokens[1].Lexeme != "radius" {
+		t.Fatalf("token 1 = %s", tokens[1])
+	}
+}
+
+func TestLexLeadingDotFloat(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var a = .5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[3].Type != token.Float || tokens[3].Lexeme != ".5" {
+		t.Fatalf("token 3 = %s, want FLOAT(\".5\")", tokens[3])
+	}
+}
+
+// Member access on a number-like property must still lex as a dot.
+func TestLexDotIsNotSwallowedAfterAnIdentifier(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var a = b.c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[4].Type != token.Dot {
+		t.Fatalf("token 4 = %s, want %s", tokens[4].Type, token.Dot)
+	}
+}

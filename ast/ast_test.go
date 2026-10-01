@@ -42,3 +42,48 @@ func TestJSONValueIncludesNodeKinds(t *testing.T) {
 		t.Fatalf("statement kind = %#v", statement["kind"])
 	}
 }
+
+func TestJSONValueIncludesTriviaAndAnnotations(t *testing.T) {
+	file, err := gdparser.ParseString("@export var speed := 1.0  # why\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := ast.JSONValue(file).(map[string]any)["statements"].([]any)[0].(map[string]any)
+	annotations, ok := statement["annotations"].([]any)
+	if !ok || len(annotations) != 1 {
+		t.Fatalf("annotations = %#v", statement["annotations"])
+	}
+	if name := annotations[0].(map[string]any)["name"]; name != "export" {
+		t.Fatalf("annotation name = %#v", name)
+	}
+	trailing, ok := statement["trailing_comment"].(map[string]any)
+	if !ok || trailing["text"] != "# why" {
+		t.Fatalf("trailing comment = %#v", statement["trailing_comment"])
+	}
+}
+
+// A statement that carries neither trivia value omits both fields.
+func TestJSONValueOmitsEmptyTrivia(t *testing.T) {
+	file, err := gdparser.ParseString("pass\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := ast.JSONValue(file).(map[string]any)["statements"].([]any)[0].(map[string]any)
+	for _, key := range []string{"annotations", "trailing_comment", "blank_lines_before"} {
+		if _, present := statement[key]; present {
+			t.Errorf("%s should be omitted when empty", key)
+		}
+	}
+}
+
+func TestTriviaOfReportsNilForUnsupportedStatements(t *testing.T) {
+	if got := ast.TriviaOf(nil); got != nil {
+		t.Fatalf("TriviaOf(nil) = %#v", got)
+	}
+}
+
+func TestAnnotationsReportsNilForOtherNodes(t *testing.T) {
+	if got := ast.Annotations(&ast.Identifier{Name: "x"}); got != nil {
+		t.Fatalf("Annotations(identifier) = %#v", got)
+	}
+}

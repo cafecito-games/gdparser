@@ -109,7 +109,7 @@ Lower-level packages are available when a tool needs more control:
 - `lexer` converts source into indentation-aware tokens.
 - `parser` builds the typed AST.
 - `ast` defines nodes, source spans, traversal, tree dumps, and JSON values.
-- `format` emits canonical GDScript.
+- `format` emits canonical GDScript, and `format.Options` configures it.
 - `token` defines token kinds and source positions.
 - `textresource` parses the shared `.tscn`, `.tres`, and `.escn` syntax.
 - `configfile` parses ConfigFile syntax used by `project.godot`, `.cfg`,
@@ -221,6 +221,51 @@ structure and comments, but it may normalize indentation, spacing, parentheses,
 blank lines, and literal spelling. If exact source trivia is required, retain
 the original source alongside the AST.
 
+Statements also record the formatting-relevant context the source gave them:
+
+- `ast.Trivia` holds the blank lines written before a statement and the comment
+  written after it on the same line. `ast.TriviaOf` reads it from any statement.
+- Annotations are attached to the declaration they decorate, through the
+  `Annotations` field on variable, function, class, signal, and enum
+  declarations. `ast.Annotations` reads them from any node. An annotation that
+  decorates nothing, such as a file-level `@icon`, remains its own statement.
+  This is a deliberate change in tree shape: `@export var speed` is one
+  statement, not an annotation statement followed by a declaration, and a
+  comment written after a statement is that statement's trivia rather than a
+  sibling comment statement.
+- String literals record their quote character and the triple-quoted and
+  `r`-prefixed forms, so they can be requoted without re-lexing their escapes.
+
+## Style guide formatting
+
+`format.File` emits the layout described by the
+[Godot GDScript style guide](https://docs.godotengine.org/en/stable/tutorials/scripting/gdscript/gdscript_styleguide.html):
+tabs for indentation, lines kept within 100 columns, two blank lines around
+function and class declarations, double quotes unless single quotes escape fewer
+characters, `and`/`or`/`not` in place of `&&`/`||`/`!`, one space after a comment
+marker, and trailing commas in arrays, dictionaries, and enums that span several
+lines.
+
+A construct that does not fit the column budget is broken one element per line.
+Call arguments, parameter lists, and conditions indent two levels, while arrays,
+dictionaries, and enums indent one, as the guide prescribes. Breaking a logical
+expression wraps it in parentheses and starts each continuation line with its
+`and` or `or` keyword.
+
+`format.FileWithOptions` takes a `format.Options` for tools that need to differ.
+Every field's zero value is the style guide default, so a partially populated
+`Options` inherits the rest:
+
+```go
+source := format.FileWithOptions(file, format.Options{LineWidth: 80})
+```
+
+Two rules are worth calling out. Blank lines written inside a function are kept
+but clamped, so hand-placed logical breaks survive while runs of blank lines do
+not. Comment spacing is normalized even though the guide asks for no space on
+commented-out code, because prose and commented-out code cannot be told apart;
+`CommentSpacing: PreserveComments` turns that off.
+
 ## Development
 
 Run the standard checks from the repository root:
@@ -239,8 +284,12 @@ GDPARSER_CORPUS=/path/to/godot/project go test -run TestCorpus -count=1 -v .
 ```
 
 The corpus test discovers all supported files recursively and verifies parse,
-format/reparse, and normalized structural equality. The external corpus is
-read-only and is not included in this repository.
+format/reparse, normalized structural equality, and, for GDScript, that
+formatting is idempotent and leaves no trailing whitespace. The structural
+comparison canonicalizes the spellings that formatting is defined to normalize,
+so a respelled literal, comment, or boolean operator is not reported as lost
+structure. The external corpus is read-only and is not included in this
+repository.
 
 See [AGENTS.md](AGENTS.md) for the repository architecture, invariants, and
 contribution workflow.
