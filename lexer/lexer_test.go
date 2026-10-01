@@ -290,7 +290,7 @@ func TestLexEllipsis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pair[4].Type != token.Range || pair[4].Lexeme != ".." {
+	if pair[4].Type != token.DotDot || pair[4].Lexeme != ".." {
 		t.Fatalf("token 4 = %s %q, want .. \"..\"", pair[4].Type, pair[4].Lexeme)
 	}
 }

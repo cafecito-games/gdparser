@@ -596,7 +596,7 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 	case p.at(token.Underscore):
 		keyword := p.advance()
 		return &ast.WildcardPattern{Base: base(keyword.Span)}, nil
-	case p.at(token.Range):
+	case p.at(token.DotDot):
 		keyword := p.advance()
 		return &ast.RestPattern{Base: base(keyword.Span)}, nil
 	case p.at(token.LBracket):
@@ -647,7 +647,7 @@ func (p *parser) parseDictionaryPattern(start token.Token) (ast.Expression, erro
 		if rest {
 			return nil, p.error(p.peek(), "the '..' pattern must be the last entry of a dictionary pattern")
 		}
-		if p.at(token.Range) {
+		if p.at(token.DotDot) {
 			// The rest is held as an entry whose key is the ".." itself, so that
 			// an entry with no value is written as its key alone either way.
 			keyword := p.advance()

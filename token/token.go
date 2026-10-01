@@ -44,12 +44,15 @@ const (
 	Semicolon Type = ";"
 	Colon     Type = ":"
 	Dot       Type = "."
-	Range     Type = ".."
-	Ellipsis  Type = "..."
-	At        Type = "@"
-	Dollar    Type = "$"
-	Percent   Type = "%"
-	Arrow     Type = "->"
+	// DotDot is the ".." that stands for the elements an array or dictionary
+	// pattern does not list. Godot calls it PERIOD_PERIOD and keeps it apart from
+	// the "..." of a rest parameter; GDScript has no range operator.
+	DotDot   Type = ".."
+	Ellipsis Type = "..."
+	At       Type = "@"
+	Dollar   Type = "$"
+	Percent  Type = "%"
+	Arrow    Type = "->"
 
 	Assign           Type = "="
 	InferAssign      Type = ":="
