@@ -583,9 +583,13 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		return p.collection(arrayLayout, elements, node.Comments)
 	case *ast.DictionaryLiteral:
+		separator := ": "
+		if node.LuaStyle {
+			separator = " = "
+		}
 		entries := make([]doc, len(node.Entries))
 		for index, entry := range node.Entries {
-			entries[index] = concat(p.expression(entry.Key, 0), text(": "), p.expression(entry.Value, 0))
+			entries[index] = concat(p.expression(entry.Key, 0), text(separator), p.expression(entry.Value, 0))
 		}
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.BindingPattern:

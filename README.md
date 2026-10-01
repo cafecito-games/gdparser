@@ -175,6 +175,8 @@ corpus, including:
   `return`, and `assert`;
 - `match` patterns, including the wildcard, array and dictionary patterns, and
   the `var name` binding pattern that `ast.BindingPattern` represents;
+- both dictionary spellings, `{"key": value}` and `{key = value}`, which
+  `ast.DictionaryLiteral.LuaStyle` tells apart;
 - literals, collections, calls, subscripts, attributes, lambdas (including the
   named form Godot reports in a stack trace), casts, conditional expressions,
   `await`, and `preload`;
