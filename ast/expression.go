@@ -83,6 +83,8 @@ type CallExpression struct {
 	Base
 	Callee    Expression   `json:"callee"`
 	Arguments []Expression `json:"arguments"`
+	// Comments holds the comments written inside the argument list.
+	Comments []CollectionComment `json:"comments,omitempty"`
 }
 
 func (*CallExpression) node()       {}
@@ -113,6 +115,8 @@ func (*SubscriptExpression) expression() {}
 type ArrayLiteral struct {
 	Base
 	Elements []Expression `json:"elements"`
+	// Comments holds the comments written inside the brackets.
+	Comments []CollectionComment `json:"comments,omitempty"`
 }
 
 func (*ArrayLiteral) node()       {}
@@ -128,6 +132,8 @@ type DictionaryEntry struct {
 type DictionaryLiteral struct {
 	Base
 	Entries []DictionaryEntry `json:"entries"`
+	// Comments holds the comments written inside the braces.
+	Comments []CollectionComment `json:"comments,omitempty"`
 }
 
 func (*DictionaryLiteral) node()       {}
@@ -164,6 +170,8 @@ type LambdaExpression struct {
 	KeywordSpan     token.Span  `json:"keyword_span,omitempty"`
 	Body            []Statement `json:"body"`
 	Inline          bool        `json:"inline,omitempty"`
+	// ParameterComments holds the comments written inside the parameter list.
+	ParameterComments []CollectionComment `json:"parameter_comments,omitempty"`
 }
 
 func (*LambdaExpression) node()       {}

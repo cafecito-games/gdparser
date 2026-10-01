@@ -149,6 +149,8 @@ type FunctionDeclaration struct {
 	KeywordSpan     token.Span    `json:"keyword_span,omitempty"`
 	Abstract        bool          `json:"abstract,omitempty"`
 	Body            []Statement   `json:"body"`
+	// ParameterComments holds the comments written inside the parameter list.
+	ParameterComments []CollectionComment `json:"parameter_comments,omitempty"`
 }
 
 func (*FunctionDeclaration) node()      {}
@@ -180,6 +182,8 @@ type SignalDeclaration struct {
 	NameSpan    token.Span    `json:"name_span,omitempty"`
 	KeywordSpan token.Span    `json:"keyword_span,omitempty"`
 	Parameters  []Parameter   `json:"parameters,omitempty"`
+	// ParameterComments holds the comments written inside the parameter list.
+	ParameterComments []CollectionComment `json:"parameter_comments,omitempty"`
 }
 
 func (*SignalDeclaration) node()      {}
@@ -192,7 +196,6 @@ type EnumMember struct {
 	NameSpan     token.Span `json:"name_span,omitempty"`
 	Value        Expression `json:"value,omitempty"`
 	OperatorSpan token.Span `json:"operator_span,omitempty"`
-	Comments     []*Comment `json:"comments,omitempty"`
 }
 
 // PropertySetter stores a property's setter parameter and body.
@@ -213,6 +216,8 @@ type EnumDeclaration struct {
 	NameSpan    token.Span    `json:"name_span,omitempty"`
 	KeywordSpan token.Span    `json:"keyword_span,omitempty"`
 	Members     []EnumMember  `json:"members"`
+	// Comments holds the comments written inside the enum body.
+	Comments []CollectionComment `json:"comments,omitempty"`
 }
 
 func (*EnumDeclaration) node()      {}

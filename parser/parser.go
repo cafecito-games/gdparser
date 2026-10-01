@@ -403,6 +403,18 @@ func spanFrom(start token.Position, end token.Position) ast.Base {
 	return ast.Base{SourceSpan: token.Span{Start: start, End: end}}
 }
 
+// takeCollectionComments consumes a run of comments written inside a bracketed
+// construct and anchors each one to the item at index. A comment that starts on
+// the line the previous token ended is recorded as trailing that line.
+func (p *parser) takeCollectionComments(comments *[]ast.CollectionComment, index int) {
+	for p.at(token.Comment) {
+		trailing := p.current > 0 && p.previous().Span.End.Line == p.peek().Span.Start.Line
+		*comments = append(*comments, ast.CollectionComment{
+			Comment: commentNode(p.advance()), Index: index, Trailing: trailing,
+		})
+	}
+}
+
 func commentNode(tok token.Token) *ast.Comment {
 	return &ast.Comment{Base: base(tok.Span), Text: tok.Lexeme, Documentation: len(tok.Lexeme) > 1 && tok.Lexeme[1] == '#'}
 }

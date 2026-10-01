@@ -401,3 +401,75 @@ func TestCommaAfterItemEndingInAComment(t *testing.T) {
 		})
 	}
 }
+
+// TestCollectionCommentPlacement states the exact output for a comment written
+// between the items of a bracketed construct.
+func TestCollectionCommentPlacement(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "a comment between elements keeps its own line",
+			source: "var x = [\n\t1,\n\t\t# c\n\t2,\n]\n",
+			want:   "var x = [\n\t1,\n\t# c\n\t2,\n]\n",
+		},
+		{
+			name:   "a comment after the last element follows its comma",
+			source: "var x = [\n\t1,\n\t# c\n]\n",
+			want:   "var x = [\n\t1,\n\t# c\n]\n",
+		},
+		{
+			name:   "an end of line comment stays on its element's line",
+			source: "var x = [\n\t1,  # c\n\t2,\n]\n",
+			want:   "var x = [\n\t1,  # c\n\t2,\n]\n",
+		},
+		{
+			name:   "a comment on the opening line stays there",
+			source: "var x = [  # c\n\t1,\n]\n",
+			want:   "var x = [  # c\n\t1,\n]\n",
+		},
+		{
+			name:   "a comment keeps an otherwise empty collection broken",
+			source: "var x = [\n\t# c\n]\n",
+			want:   "var x = [\n\t# c\n]\n",
+		},
+		{
+			name:   "a comment breaks a collection that would otherwise fit",
+			source: "var x = [1,\n\t# c\n\t2]\n",
+			want:   "var x = [\n\t1,\n\t# c\n\t2,\n]\n",
+		},
+		{
+			name:   "a dictionary comment keeps its own line",
+			source: "var d = {\"a\": 1,\n\t# c\n\t\"b\": 2}\n",
+			want:   "var d = {\n\t\"a\": 1,\n\t# c\n\t\"b\": 2,\n}\n",
+		},
+		{
+			name:   "an argument list indents a comment with its arguments",
+			source: "f(1,\n\t# c\n\t2)\n",
+			want:   "f(\n\t\t1,\n\t\t# c\n\t\t2\n)\n",
+		},
+		{
+			name:   "an enum comment keeps its own line",
+			source: "enum E {\n\t# c\n\tA,\n}\n",
+			want:   "enum E {\n\t# c\n\tA,\n}\n",
+		},
+		{
+			name:   "a comment after the last enum member survives",
+			source: "enum E {\n\tA,\n\t# c\n}\n",
+			want:   "enum E {\n\tA,\n\t# c\n}\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("comments.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+		})
+	}
+}

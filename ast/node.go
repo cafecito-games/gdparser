@@ -47,6 +47,8 @@ type Annotation struct {
 	Name      string       `json:"name"`
 	NameSpan  token.Span   `json:"name_span,omitempty"`
 	Arguments []Expression `json:"arguments,omitempty"`
+	// Comments holds the comments written inside the argument list.
+	Comments []CollectionComment `json:"comments,omitempty"`
 	// OwnLine reports that the annotation was written on its own source line
 	// rather than ahead of a declaration on the same line. Formatting keeps that
 	// choice, which the style guide does not prescribe.
@@ -66,6 +68,35 @@ type Comment struct {
 
 func (*Comment) node()      {}
 func (*Comment) statement() {}
+
+// CollectionComment is a comment written between the delimiters of a bracketed
+// construct, such as an array, a dictionary, an enum body, or an argument or
+// parameter list. No statement exists inside brackets to carry such a comment,
+// so each one is anchored to the item it was written against instead of being
+// stored beside the items.
+type CollectionComment struct {
+	// Comment is the comment itself.
+	Comment *Comment `json:"comment"`
+	// Index is the position of the item the comment precedes. A comment written
+	// after the last item carries the number of items.
+	Index int `json:"index"`
+	// Trailing reports that the comment ended the source line of the item
+	// before Index, as in "1,  # one", rather than occupying a line of its own.
+	Trailing bool `json:"trailing,omitempty"`
+}
+
+// CollectionCommentsAt returns the comments in comments anchored to index,
+// keeping their source order. Only comments whose Trailing matches trailing are
+// returned, so a caller can emit own-line and end-of-line comments separately.
+func CollectionCommentsAt(comments []CollectionComment, index int, trailing bool) []*Comment {
+	var out []*Comment
+	for _, comment := range comments {
+		if comment.Index == index && comment.Trailing == trailing && comment.Comment != nil {
+			out = append(out, comment.Comment)
+		}
+	}
+	return out
+}
 
 // Directive represents file/class directives such as extends and class_name.
 type Directive struct {

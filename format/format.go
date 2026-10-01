@@ -144,7 +144,7 @@ func (p *printer) annotation(node *ast.Annotation) doc {
 		for index, argument := range node.Arguments {
 			arguments[index] = p.expression(argument, 0)
 		}
-		document = concat(document, p.collection(argumentLayout, arguments))
+		document = concat(document, p.collection(argumentLayout, arguments, node.Comments))
 	}
 	if node.TrailingComment != nil {
 		document = concat(document, text("  "+p.commentText(node.TrailingComment)))
@@ -191,7 +191,7 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 	case *ast.SignalDeclaration:
 		document := doc(text("signal " + node.Name))
 		if node.Parameters != nil {
-			document = concat(document, p.parameterList(node.Parameters))
+			document = concat(document, p.parameterList(node.Parameters, node.ParameterComments))
 		}
 		return document
 	case *ast.EnumDeclaration:
@@ -268,7 +268,7 @@ func (p *printer) function(node *ast.FunctionDeclaration) doc {
 	if node.Static {
 		prefix = "static func "
 	}
-	header := concat(text(prefix+node.Name), p.parameterList(node.Parameters))
+	header := concat(text(prefix+node.Name), p.parameterList(node.Parameters, node.ParameterComments))
 	if node.ReturnType != "" {
 		header = concat(header, text(" -> "+node.ReturnType))
 	}
@@ -285,19 +285,13 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 	}
 	members := make([]doc, len(node.Members))
 	for index, member := range node.Members {
-		var parts []doc
-		for _, comment := range member.Comments {
-			parts = append(parts, text(p.commentText(comment)), hardLine)
-		}
-		memberText := member.Name
 		if member.Value != nil {
-			parts = append(parts, text(memberText+" = "), p.expression(member.Value, 0))
-		} else {
-			parts = append(parts, text(memberText))
+			members[index] = concat(text(member.Name+" = "), p.expression(member.Value, 0))
+			continue
 		}
-		members[index] = concat(parts...)
+		members[index] = text(member.Name)
 	}
-	return concat(text(header+" "), p.collection(enumLayout, members))
+	return concat(text(header+" "), p.collection(enumLayout, members, node.Comments))
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {
@@ -335,8 +329,12 @@ var (
 )
 
 // collection renders items inside brackets, on one line when they fit and one
-// per line otherwise.
-func (p *printer) collection(shape layout, items []doc) doc {
+// per line otherwise. Comments written between the brackets are anchored to the
+// items they were written against.
+func (p *printer) collection(shape layout, items []doc, comments []ast.CollectionComment) doc {
+	if len(comments) > 0 {
+		return p.commentedCollection(shape, items, comments)
+	}
 	if len(items) == 0 {
 		return text(shape.open + shape.close)
 	}
@@ -379,12 +377,60 @@ func (p *printer) collection(shape layout, items []doc) doc {
 	))
 }
 
-func (p *printer) parameterList(parameters []ast.Parameter) doc {
+// commentedCollection renders a bracketed construct that holds comments. Such a
+// construct always breaks, because a comment can only survive on a line of its
+// own or at the end of the line it was written on.
+func (p *printer) commentedCollection(shape layout, items []doc, comments []ast.CollectionComment) doc {
+	var lines []doc
+	for index, item := range items {
+		for _, comment := range ast.CollectionCommentsAt(comments, index, false) {
+			lines = append(lines, text(p.commentText(comment)))
+		}
+		parts := []doc{item}
+		switch {
+		case index < len(items)-1:
+			// A separating comma is required, so an item ending in a comment
+			// moves it onto the next line instead of losing it.
+			if endsWithLineComment(item) {
+				parts = append(parts, hardLine)
+			}
+			parts = append(parts, text(","))
+		case shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken && !endsWithLineComment(item):
+			parts = append(parts, text(","))
+		}
+		for _, comment := range ast.CollectionCommentsAt(comments, index+1, true) {
+			parts = append(parts, text("  "+p.commentText(comment)))
+		}
+		lines = append(lines, concat(parts...))
+	}
+	for _, comment := range ast.CollectionCommentsAt(comments, len(items), false) {
+		lines = append(lines, text(p.commentText(comment)))
+	}
+	opening := []doc{text(shape.open)}
+	// A comment written on the opening line stays there, since no item precedes
+	// it to hold it.
+	if len(items) > 0 || len(lines) == 0 {
+		for _, comment := range ast.CollectionCommentsAt(comments, 0, true) {
+			opening = append(opening, text("  "+p.commentText(comment)))
+		}
+	}
+	if len(lines) == 0 {
+		return concat(concat(opening...), hardLine, text(shape.close))
+	}
+	return concat(
+		concat(opening...),
+		nest(shape.levels, concat(hardLine, join(hardLine, lines))),
+		hardLine,
+		text(shape.close),
+	)
+}
+
+func (p *printer) parameterList(parameters []ast.Parameter, comments []ast.CollectionComment) doc {
 	items := make([]doc, len(parameters))
 	for index, parameter := range parameters {
 		items[index] = p.parameter(parameter)
 	}
-	return p.collection(argumentLayout, items)
+	return p.collection(argumentLayout, items, comments)
 }
 
 func (p *printer) parameter(parameter ast.Parameter) doc {
@@ -498,7 +544,7 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		for index, argument := range node.Arguments {
 			arguments[index] = p.expression(argument, 0)
 		}
-		return concat(p.expression(node.Callee, 12), p.collection(argumentLayout, arguments))
+		return concat(p.expression(node.Callee, 12), p.collection(argumentLayout, arguments, node.Comments))
 	case *ast.MemberExpression:
 		return concat(p.expression(node.Object, 12), text("."+node.Property))
 	case *ast.SubscriptExpression:
@@ -508,15 +554,15 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		for index, element := range node.Elements {
 			elements[index] = p.expression(element, 0)
 		}
-		return p.collection(arrayLayout, elements)
+		return p.collection(arrayLayout, elements, node.Comments)
 	case *ast.DictionaryLiteral:
 		entries := make([]doc, len(node.Entries))
 		for index, entry := range node.Entries {
 			entries[index] = concat(p.expression(entry.Key, 0), text(": "), p.expression(entry.Value, 0))
 		}
-		return p.collection(dictionaryLayout, entries)
+		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.LambdaExpression:
-		header := concat(text("func"), p.parameterList(node.Parameters))
+		header := concat(text("func"), p.parameterList(node.Parameters, node.ParameterComments))
 		if node.ReturnType != "" {
 			header = concat(header, text(" -> "+node.ReturnType))
 		}
