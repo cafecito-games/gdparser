@@ -169,57 +169,6 @@ func TestLexCommentAtColumnZeroStillDedents(t *testing.T) {
 	}
 }
 
-func TestLexOwnLineCommaEndsALambdaBody(t *testing.T) {
-	tokens, err := lexer.Lex([]byte("var x = [\n\tfunc():\n\t\tpass\n\t,\n\t2,\n]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var kinds []token.Type
-	for _, tok := range tokens {
-		kinds = append(kinds, tok.Type)
-	}
-	var dedents int
-	for _, kind := range kinds {
-		if kind == token.Dedent {
-			dedents++
-		}
-	}
-	if dedents != 1 {
-		t.Fatalf("got %d DEDENT tokens, want 1: %v", dedents, kinds)
-	}
-}
-
-func TestLexNestedLambdaLayoutsUnwindIndependently(t *testing.T) {
-	tokens, err := lexer.Lex([]byte("var x = [func():\n\t\tf(func():\n\t\t\t\tpass\n\t\t)\n\t\tpass\n]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The inner body closes with the parenthesis that ends it, and the outer
-	// body stays open for the statement that follows.
-	want := []token.Type{
-		token.Var, token.Identifier, token.Assign, token.LBracket,
-		token.Func, token.LParen, token.RParen, token.Colon, token.Newline,
-		token.Indent, token.Identifier, token.LParen,
-		token.Func, token.LParen, token.RParen, token.Colon, token.Newline,
-		token.Indent, token.Pass, token.Newline, token.Dedent,
-		token.RParen, token.Newline,
-		token.Pass, token.Newline, token.Dedent,
-		token.RBracket, token.Newline, token.EOF,
-	}
-	var kinds []token.Type
-	for _, tok := range tokens {
-		kinds = append(kinds, tok.Type)
-	}
-	if len(kinds) != len(want) {
-		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
-	}
-	for i, typ := range want {
-		if kinds[i] != typ {
-			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
-		}
-	}
-}
-
 func TestLexCommentUnindentedToNoOuterBlock(t *testing.T) {
 	tokens, err := lexer.Lex([]byte("func a():\n\tpass\n  # c\n"))
 	if err != nil {
@@ -305,32 +254,6 @@ func TestLexCommentLookaheadSkipsBlankCarriageReturnLines(t *testing.T) {
 	}
 }
 
-func TestLexCommentStaysInsideTheInnerLambdaBody(t *testing.T) {
-	tokens, err := lexer.Lex([]byte("var x = [func():\n\t\tvar y = [func():\n\t\t\t\tpass\n\t\t# c\n\t\t]\n]\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Only the comma or bracket that ends a lambda body may leave it, so the
-	// comment below the inner body's level keeps that body open.
-	var kinds []token.Type
-	var firstDedent, comment int
-	for index, tok := range tokens {
-		kinds = append(kinds, tok.Type)
-		if tok.Type == token.Dedent && firstDedent == 0 {
-			firstDedent = index
-		}
-		if tok.Type == token.Comment {
-			comment = index
-		}
-	}
-	if comment == 0 {
-		t.Fatalf("no comment token: %v", kinds)
-	}
-	if firstDedent < comment {
-		t.Fatalf("the inner body closed before its comment: %v", kinds)
-	}
-}
-
 // A run of comment-only lines shares one lookahead for the line of code that
 // follows it, so lexing stays linear in the length of the run. Rescanning per
 // line made a file of this size take minutes. The budget is far above the
@@ -361,13 +284,14 @@ func TestLexEllipsis(t *testing.T) {
 	if tokens[3].Type != token.Ellipsis || tokens[3].Lexeme != "..." {
 		t.Fatalf("token 3 = %s %q, want ... \"...\"", tokens[3].Type, tokens[3].Lexeme)
 	}
-	// Two dots are not an ellipsis, so the longest match may not swallow them.
+	// Two dots are the range of a match pattern, not an ellipsis, so the
+	// longest match may not swallow them into one.
 	pair, err := lexer.Lex([]byte("var x = a..b\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pair[4].Type != token.Dot || pair[5].Type != token.Dot {
-		t.Fatalf("tokens 4 and 5 = %s %s, want . .", pair[4].Type, pair[5].Type)
+	if pair[4].Type != token.DotDot || pair[4].Lexeme != ".." {
+		t.Fatalf("token 4 = %s %q, want .. \"..\"", pair[4].Type, pair[4].Lexeme)
 	}
 }
 

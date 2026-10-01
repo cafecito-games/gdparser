@@ -23,8 +23,8 @@ var styleCases = []struct {
 	},
 	{
 		name:   "single line suite is expanded",
-		source: "if x: return\n",
-		want:   "if x:\n\treturn\n",
+		source: "func f(x):\n\tif x: return\n",
+		want:   "func f(x):\n\tif x:\n\t\treturn\n",
 	},
 	{
 		name:   "two blank lines surround a function",
@@ -93,9 +93,10 @@ var styleCases = []struct {
 	},
 	{
 		name: "rewriting a bang keeps its meaning",
-		// not binds looser than !, so the parenthesis has to appear.
+		// Godot reads "!" and "not" through the same rule at the same level, so
+		// the one spelling becomes the other with nothing else to change.
 		source: "var a := !b == c\n",
-		want:   "var a := (not b) == c\n",
+		want:   "var a := not b == c\n",
 	},
 	{
 		name:   "unnecessary parentheses are dropped",
@@ -260,9 +261,11 @@ var styleCases = []struct {
 		want:   "var a := b if c else d\n",
 	},
 	{
-		name:   "power associates to the right",
-		source: "var a := 2 ** 3 ** 4\nvar b := (2 ** 3) ** 4\n",
-		want:   "var a := 2 ** 3 ** 4\nvar b := (2 ** 3) ** 4\n",
+		name: "power associates to the left",
+		// Godot reads every binary operator left-associatively, "**" included,
+		// so the grouping that spells out that order adds nothing.
+		source: "var a := 2 ** 3 ** 4\nvar b := (2 ** 3) ** 4\nvar c := 2 ** (3 ** 4)\n",
+		want:   "var a := 2 ** 3 ** 4\nvar b := 2 ** 3 ** 4\nvar c := 2 ** (3 ** 4)\n",
 	},
 }
 
@@ -448,8 +451,8 @@ func TestCollectionCommentPlacement(t *testing.T) {
 		},
 		{
 			name:   "an argument list indents a comment with its arguments",
-			source: "f(1,\n\t# c\n\t2)\n",
-			want:   "f(\n\t\t1,\n\t\t# c\n\t\t2\n)\n",
+			source: "func w():\n\tf(1,\n\t\t# c\n\t\t2)\n",
+			want:   "func w():\n\tf(\n\t\t\t1,\n\t\t\t# c\n\t\t\t2\n\t)\n",
 		},
 		{
 			name:   "an enum comment keeps its own line",
@@ -666,8 +669,11 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n]\n",
 		},
 		{
-			name:   "an element another element follows",
-			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t, 2]\n",
+			name: "an element another element follows",
+			// The comma is written at the body's own indentation, which is the
+			// outermost one Godot accepts once a match has opened blocks inside
+			// the body.
+			source: "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t, 2]\n",
 			want:   "var x = [\n\tfunc(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n\t2,\n]\n",
 		},
 		{
@@ -687,7 +693,7 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 		},
 		{
 			name:   "a parameter's default value",
-			source: "func f(a = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t):\n\tpass\n",
+			source: "func f(a = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t):\n\tpass\n",
 			want:   "func f(\n\t\ta = func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t,\n):\n\tpass\n",
 		},
 		{
@@ -787,6 +793,51 @@ func TestCarriageReturnsLeaveNoTraceInAComment(t *testing.T) {
 			}
 			if second := format.File(again); second != formatted {
 				t.Errorf("formatting is not idempotent: %q then %q", formatted, second)
+			}
+		})
+	}
+}
+
+// A block lambda body ends at a dedent, which stands on no line of its own, so
+// nothing blank was written where it ends. The body used to be closed with a
+// line break the source did not hold, which put a blank line after the construct
+// holding the lambda.
+func TestBlockLambdaLeavesNoBlankLineBehind(t *testing.T) {
+	source := "func w():\n\tconfigure(func(options):\n\t\toptions.debug = true\n\t)\n\t_ready = true\n"
+	file, err := parser.Parse("blank.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := format.File(file)
+	if strings.Contains(formatted, "\n\n") {
+		t.Fatalf("formatted output holds a blank line that was never written:\n%s", formatted)
+	}
+	if _, err := parser.Parse("blank.gd", []byte(formatted)); err != nil {
+		t.Fatalf("formatted output did not parse: %v\n%s", err, formatted)
+	}
+}
+
+// An annotation that decorates nothing stands as a statement of its own, and the
+// comment that ended its line is written once. It used to be written by both the
+// annotation and the statement around it.
+func TestStandaloneAnnotationWritesItsCommentOnce(t *testing.T) {
+	for _, test := range []struct{ name, source string }{
+		{"decorating a statement", "func f(a):\n\t@warning_ignore(\"x\")  # c\n\tprint(a)\n"},
+		{"on its own line above a declaration", "@export  # why\nvar speed := 1.0\n"},
+		{"ahead of a declaration on its line", "@export var speed := 1.0  # why\n"},
+		{"above a match branch", "func f(v):\n\tmatch v:\n\t\t_:\n\t\t\tpass\n\t\t@warning_ignore(\"x\")  # c\n\t\t1:\n\t\t\tpass\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("annotation.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.source {
+				t.Fatalf("formatted:\n--- got ---\n%s--- want ---\n%s", formatted, test.source)
+			}
+			if strings.Count(formatted, "# c")+strings.Count(formatted, "# why") != 1 {
+				t.Fatalf("the comment was written more than once:\n%s", formatted)
 			}
 		})
 	}

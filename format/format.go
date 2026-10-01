@@ -125,6 +125,12 @@ func (p *printer) statement(statement ast.Statement) doc {
 	for _, annotation := range ast.Annotations(statement) {
 		parts = append(parts, p.annotation(annotation))
 		if annotation.OwnLine {
+			// An annotation on a line of its own carries the comment that ended
+			// that line. One written ahead of the declaration shares its line, so
+			// the declaration's own trailing comment is the only one there.
+			if annotation.TrailingComment != nil {
+				parts = append(parts, text("  "+p.commentText(annotation.TrailingComment)))
+			}
 			parts = append(parts, hardLine)
 			continue
 		}
@@ -145,9 +151,9 @@ func (p *printer) annotation(node *ast.Annotation) doc {
 		arguments := p.arguments(node.Arguments)
 		document = concat(document, p.collection(argumentLayout, arguments, node.Comments))
 	}
-	if node.TrailingComment != nil {
-		document = concat(document, text("  "+p.commentText(node.TrailingComment)))
-	}
+	// The comment that ended the annotation's line is written by whoever places
+	// the line, since an annotation sharing a declaration's line has none of its
+	// own.
 	return document
 }
 
@@ -203,6 +209,11 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 				parts = append(parts, hardLine)
 				keyword = "elif "
 			}
+			// A comment above the keyword introduces the branch, so it stands on
+			// its own line at the keyword's indentation.
+			for _, comment := range branch.Comments {
+				parts = append(parts, text(p.commentText(comment)), hardLine)
+			}
 			parts = append(parts,
 				text(keyword),
 				closeAfter(p.headerExpression(branch.Condition), ":"),
@@ -210,7 +221,11 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 			)
 		}
 		if node.Else != nil {
-			parts = append(parts, hardLine, text("else:"), p.suite(node.Else))
+			parts = append(parts, hardLine)
+			for _, comment := range node.ElseComments {
+				parts = append(parts, text(p.commentText(comment)), hardLine)
+			}
+			parts = append(parts, text("else:"), p.suite(node.Else))
 		}
 		return concat(parts...)
 	case *ast.WhileStatement:
@@ -248,6 +263,9 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 					lines = append(lines, text(p.commentText(comment)))
 				}
 			}
+			for _, annotation := range matchCase.Annotations {
+				lines = append(lines, p.statement(annotation))
+			}
 			lines = append(lines, p.matchCase(matchCase))
 		}
 		for _, trailing := range []bool{false, true} {
@@ -281,6 +299,9 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 		parts = append(parts, text(operator), p.expression(node.Value, 0))
 	}
 	header := concat(parts...)
+	if shorthand := p.shorthandAccessors(node); shorthand != nil {
+		return concat(header, text(": "), join(text(", "), shorthand))
+	}
 	if node.Getter == nil && node.Setter == nil {
 		return header
 	}
@@ -320,7 +341,45 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 		written++
 		addComments(written)
 	}
+	for _, name := range shorthandAccessorNames(node) {
+		accessors = append(accessors, hardLine, text(name))
+		written++
+		addComments(written)
+	}
 	return concat(header, concat(colon...), nest(1, concat(accessors...)))
+}
+
+// shorthandAccessors returns the "get = method" accessors of node when they are
+// to be written on the declaration's own line, and nil otherwise: a property
+// written with accessor bodies, or one whose shorthand accessors were written in
+// an indented block, keeps that block because it may also hold comments.
+func (p *printer) shorthandAccessors(node *ast.VariableDeclaration) []doc {
+	if node.AccessorBlock {
+		return nil
+	}
+	var out []doc
+	for _, name := range shorthandAccessorNames(node) {
+		out = append(out, text(name))
+	}
+	return out
+}
+
+// shorthandAccessorNames returns the shorthand accessors of node in source
+// order, each spelled as it is written.
+func shorthandAccessorNames(node *ast.VariableDeclaration) []string {
+	var out []string
+	getter := node.GetterName != ""
+	setter := node.SetterName != ""
+	if getter && setter && node.SetterKeywordSpan.Start.Offset < node.GetterKeywordSpan.Start.Offset {
+		return []string{"set = " + node.SetterName, "get = " + node.GetterName}
+	}
+	if getter {
+		out = append(out, "get = "+node.GetterName)
+	}
+	if setter {
+		out = append(out, "set = "+node.SetterName)
+	}
+	return out
 }
 
 func (p *printer) function(node *ast.FunctionDeclaration) doc {
@@ -355,6 +414,11 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {
+	if len(matchCase.Patterns) == 0 {
+		// A case holding no pattern is the bare "pass" of a match that handles
+		// nothing.
+		return text("pass")
+	}
 	// A separating comma, the "when" of a guard and the branch's own colon all
 	// follow a pattern on its line, so a pattern or guard ending in a comment
 	// is parenthesized to keep them off it.
@@ -649,7 +713,7 @@ func (p *printer) logicalChain(binary *ast.BinaryExpression, parenthesize bool) 
 // by breakable operator keywords.
 func (p *printer) logicalParts(binary *ast.BinaryExpression) []doc {
 	operator := p.operatorText(binary.Operator)
-	precedence := operatorPrecedence(operator)
+	precedence := ast.OperatorPrecedence(operator)
 	var parts []doc
 	if left, ok := binary.Left.(*ast.BinaryExpression); ok && p.operatorText(left.Operator) == operator {
 		parts = p.logicalParts(left)
@@ -678,29 +742,25 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return text(prefix + node.Path)
 	case *ast.UnaryExpression:
 		operator := p.operatorText(node.Operator)
-		operandPrecedence := 11
-		if operator == "not" {
-			operandPrecedence = 3
-		}
+		// A prefix operator reads its operand at one level, which is also the
+		// level the whole unary expression binds at, so the same number decides
+		// both whether the operand needs parentheses and whether this does.
+		precedence := ast.UnaryOperandPrecedence(operator)
 		spelled := operator
 		if operator == "not" || operator == "await" {
 			spelled += " "
 		}
-		inner := concat(text(spelled), p.expression(node.Operand, operandPrecedence))
-		if operator == "not" && parentPrecedence >= 3 {
-			return parenthesized(inner)
-		}
-		if 11 < parentPrecedence {
+		inner := concat(text(spelled), p.expression(node.Operand, precedence))
+		if precedence < parentPrecedence {
 			return parenthesized(inner)
 		}
 		return inner
 	case *ast.BinaryExpression:
 		operator := p.operatorText(node.Operator)
-		precedence := operatorPrecedence(operator)
+		precedence := ast.OperatorPrecedence(operator)
+		// Every binary operator in GDScript is left-associative, so only the
+		// operand on the right has to bind tighter than the operator.
 		leftPrecedence, rightPrecedence := precedence, precedence+1
-		if operator == "**" {
-			leftPrecedence, rightPrecedence = precedence+1, precedence
-		}
 		if isLogicalOperator(operator) {
 			return p.logicalChain(node, precedence < parentPrecedence)
 		}
@@ -715,24 +775,24 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return inner
 	case *ast.TernaryExpression:
 		inner := concat(
-			p.expression(node.Value, 1), text(" if "),
-			p.expression(node.Condition, 1), text(" else "),
-			p.expression(node.Alternative, 1),
+			p.expression(node.Value, ast.PrecedenceTernary+1), text(" if "),
+			p.expression(node.Condition, ast.PrecedenceTernary), text(" else "),
+			p.expression(node.Alternative, ast.PrecedenceTernary),
 		)
-		if parentPrecedence > 0 {
+		if ast.PrecedenceTernary < parentPrecedence {
 			return parenthesized(inner)
 		}
 		return inner
 	case *ast.CallExpression:
 		return concat(
-			p.expression(node.Callee, 12),
+			p.expression(node.Callee, ast.PrecedenceCall),
 			p.collection(argumentLayout, p.arguments(node.Arguments), node.Comments),
 		)
 	case *ast.MemberExpression:
-		return closeAfter(p.expression(node.Object, 12), "."+node.Property)
+		return closeAfter(p.expression(node.Object, ast.PrecedenceAttribute), "."+node.Property)
 	case *ast.SubscriptExpression:
 		return concat(
-			p.expression(node.Object, 12),
+			p.expression(node.Object, ast.PrecedenceSubscript),
 			text("["),
 			closeAfter(p.expression(node.Index, 0), "]"),
 		)
@@ -745,6 +805,12 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		entries := make([]item, len(node.Entries))
 		for index, entry := range node.Entries {
+			if entry.Value == nil {
+				// A dictionary pattern may test that a key is present without
+				// constraining its value, which is written as the key alone.
+				entries[index] = item{doc: p.headerExpression(entry.Key)}
+				continue
+			}
 			entries[index] = item{
 				doc: concat(
 					closeAfter(p.headerExpression(entry.Key), separator),
@@ -756,6 +822,10 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.BindingPattern:
 		return text("var " + node.Name)
+	case *ast.WildcardPattern:
+		return text("_")
+	case *ast.RestPattern:
+		return text("..")
 	case *ast.LambdaExpression:
 		keyword := "func"
 		if node.Name != "" {
@@ -1026,31 +1096,4 @@ func (p *printer) commentText(comment *ast.Comment) string {
 		return raw
 	}
 	return marker + " " + body
-}
-
-func operatorPrecedence(operator string) int {
-	switch operator {
-	case "or", "||":
-		return 1
-	case "and", "&&":
-		return 2
-	case "==", "!=", "<", "<=", ">", ">=", "in", "not in", "is", "is not", "as":
-		return 3
-	case "|":
-		return 4
-	case "^":
-		return 5
-	case "&":
-		return 6
-	case "<<", ">>":
-		return 7
-	case "+", "-":
-		return 8
-	case "*", "/", "%":
-		return 9
-	case "**":
-		return 10
-	default:
-		return 0
-	}
 }

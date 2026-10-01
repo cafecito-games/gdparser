@@ -30,7 +30,7 @@ func TestInspectSupportsTransformations(t *testing.T) {
 }
 
 func TestJSONValueIncludesNodeKinds(t *testing.T) {
-	file, err := gdparser.ParseString("return 1\n")
+	file, err := gdparser.ParseString("func f():\n\treturn 1\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,9 +38,13 @@ func TestJSONValueIncludesNodeKinds(t *testing.T) {
 	if value["kind"] != "File" {
 		t.Fatalf("file kind = %#v", value["kind"])
 	}
-	statement := value["statements"].([]any)[0].(map[string]any)
+	function := value["statements"].([]any)[0].(map[string]any)
+	if function["kind"] != "FunctionDeclaration" {
+		t.Fatalf("statement kind = %#v", function["kind"])
+	}
+	statement := function["body"].([]any)[0].(map[string]any)
 	if statement["kind"] != "ReturnStatement" {
-		t.Fatalf("statement kind = %#v", statement["kind"])
+		t.Fatalf("body statement kind = %#v", statement["kind"])
 	}
 }
 

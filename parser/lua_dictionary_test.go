@@ -47,8 +47,8 @@ func TestLuaStyleDictionary(t *testing.T) {
 		},
 		{
 			name:   "as a call argument",
-			source: "foo({x = 1})\n",
-			want:   "foo({ x = 1 })\n",
+			source: "func f():\n\tfoo({x = 1})\n",
+			want:   "func f():\n\tfoo({ x = 1 })\n",
 		},
 		{
 			name:   "the colon style is unchanged",
@@ -126,14 +126,15 @@ func TestLuaStyleDictionaryNode(t *testing.T) {
 }
 
 // A dictionary pattern is written with colons only, as Godot's pattern grammar
-// has no assignment in it.
+// has no assignment in it. A key may stand alone there, so the "=" is what ends
+// the pattern short rather than the missing colon.
 func TestLuaStyleDictionaryPatternIsRejected(t *testing.T) {
 	source := "func f(v):\n\tmatch v:\n\t\t{x = 1}:\n\t\t\tpass\n"
 	_, err := parser.Parse("lua.gd", []byte(source))
 	if err == nil {
 		t.Fatal("expected a parse error")
 	}
-	if !strings.Contains(err.Error(), "expected ':' after dictionary key") {
+	if !strings.Contains(err.Error(), "expected '}' after dictionary pattern") {
 		t.Fatalf("error does not name the rule: %v", err)
 	}
 	if !strings.Contains(err.Error(), "lua.gd:3:") {

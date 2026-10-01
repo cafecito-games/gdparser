@@ -29,8 +29,9 @@ func TestBlankLinesBeforeAreCounted(t *testing.T) {
 // Blank lines written after a nested block belong to the statement that follows
 // the block, even though the block's own parse consumed them.
 func TestBlankLinesSurviveADedent(t *testing.T) {
-	file := parseSource(t, "if a:\n\tpass\n\nvar b := 2\n")
-	if got := ast.TriviaOf(file.Statements[1]).BlankLinesBefore; got != 1 {
+	file := parseSource(t, "func f(a):\n\tif a:\n\t\tpass\n\n\tvar b := 2\n")
+	body := file.Statements[0].(*ast.FunctionDeclaration).Body
+	if got := ast.TriviaOf(body[1]).BlankLinesBefore; got != 1 {
 		t.Fatalf("blank lines after block = %d, want 1", got)
 	}
 }

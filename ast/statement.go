@@ -37,6 +37,19 @@ type VariableDeclaration struct {
 	GetterSpan        token.Span          `json:"getter_span,omitempty"`
 	GetterKeywordSpan token.Span          `json:"getter_keyword_span,omitempty"`
 	Setter            *PropertySetter     `json:"setter,omitempty"`
+	// GetterName and SetterName hold the method that a shorthand accessor
+	// names, as in "var x: get = _get_x, set = _set_x". A property is written
+	// either with shorthand accessors or with accessor bodies, never with both,
+	// so a declaration carries one form or the other.
+	GetterName        string     `json:"getter_name,omitempty"`
+	GetterNameSpan    token.Span `json:"getter_name_span,omitempty"`
+	SetterName        string     `json:"setter_name,omitempty"`
+	SetterNameSpan    token.Span `json:"setter_name_span,omitempty"`
+	SetterKeywordSpan token.Span `json:"setter_keyword_span,omitempty"`
+	// AccessorBlock reports that the accessors were written in an indented
+	// block. An accessor with a body always is, because its body needs one; a
+	// shorthand accessor may be written there or on the declaration's own line.
+	AccessorBlock bool `json:"accessor_block,omitempty"`
 }
 
 func (*VariableDeclaration) node()      {}
@@ -69,6 +82,10 @@ func (*ReturnStatement) statement() {}
 // Branch is one if/elif condition and body.
 type Branch struct {
 	Base
+	// Comments holds the comments written on their own lines above the branch's
+	// keyword. They belong to no body, since the keyword's line belongs to the
+	// statement rather than to either block it separates.
+	Comments    []*Comment  `json:"comments,omitempty"`
 	KeywordSpan token.Span  `json:"keyword_span,omitempty"`
 	Condition   Expression  `json:"condition"`
 	Body        []Statement `json:"body"`
@@ -78,10 +95,12 @@ type Branch struct {
 type IfStatement struct {
 	Base
 	Trivia
-	Branches        []Branch    `json:"branches"`
-	Else            []Statement `json:"else,omitempty"`
-	ElseSpan        token.Span  `json:"else_span,omitempty"`
-	ElseKeywordSpan token.Span  `json:"else_keyword_span,omitempty"`
+	Branches []Branch    `json:"branches"`
+	Else     []Statement `json:"else,omitempty"`
+	// ElseComments holds the comments written on their own lines above "else".
+	ElseComments    []*Comment `json:"else_comments,omitempty"`
+	ElseSpan        token.Span `json:"else_span,omitempty"`
+	ElseKeywordSpan token.Span `json:"else_keyword_span,omitempty"`
 }
 
 func (*IfStatement) node()      {}
@@ -233,13 +252,18 @@ type EnumDeclaration struct {
 func (*EnumDeclaration) node()      {}
 func (*EnumDeclaration) statement() {}
 
-// MatchCase contains comma-separated patterns and a body.
+// MatchCase contains comma-separated patterns and a body. A case holding no
+// pattern is the bare "pass" that Godot accepts in a match body, which matches
+// nothing and runs nothing.
 type MatchCase struct {
 	Base
-	Patterns []Expression `json:"patterns"`
-	Guard    Expression   `json:"guard,omitempty"`
-	WhenSpan token.Span   `json:"when_span,omitempty"`
-	Body     []Statement  `json:"body"`
+	// Annotations holds the annotations written on their own lines ahead of the
+	// branch. Godot allows only @warning_ignore here.
+	Annotations []*Annotation `json:"annotations,omitempty"`
+	Patterns    []Expression  `json:"patterns"`
+	Guard       Expression    `json:"guard,omitempty"`
+	WhenSpan    token.Span    `json:"when_span,omitempty"`
+	Body        []Statement   `json:"body"`
 }
 
 // MatchStatement performs pattern matching.

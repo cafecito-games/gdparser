@@ -7,6 +7,10 @@ import (
 	"github.com/cafecito-games/gdparser/token"
 )
 
+// parseExpression reads an expression whose operators all bind at or above
+// minPrecedence, which is how Godot's parse_precedence reads one. The ternary
+// conditional is an infix operator of its own level there rather than a form
+// that only a whole expression may take.
 func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 	left, err := p.parsePrefix()
 	if err != nil {
@@ -18,40 +22,61 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 	}
 
 	for {
+		if p.at(token.Comment) {
+			// A comment may stand between an operand and the operator that
+			// follows it. Only an operator that this call would read justifies
+			// stepping over it: anything else leaves the comment where it is, for
+			// the construct around the expression to collect.
+			if ast.OperatorPrecedence(p.peekPastComments().Lexeme) < minPrecedence &&
+				p.peekPastComments().Type != token.If {
+				break
+			}
+			p.takeStrayComments()
+		}
 		typ := p.peek().Type
 		operator := p.peek().Lexeme
-		precedence, rightAssociative := infixPrecedence(typ)
 		if typ == token.Not && p.peekN(1).Type == token.In {
-			operator, precedence = "not in", 3
+			operator = "not in"
 		}
 		if typ == token.Is && p.peekN(1).Type == token.Not {
-			operator, precedence = "is not", 3
+			operator = "is not"
 		}
-		if precedence < minPrecedence {
+		precedence := ast.OperatorPrecedence(operator)
+		if typ == token.If {
+			precedence = ast.PrecedenceTernary
+		}
+		if precedence == ast.PrecedenceNone || precedence < minPrecedence {
+			break
+		}
+		if p.lambdaEnded && !p.multiline() {
+			// A lambda body just ended, and nothing encloses it that spans
+			// lines, so what follows begins the next statement rather than
+			// continuing this expression. Without this an "if" on the line after
+			// a lambda would be read as a conditional.
 			break
 		}
 		start := left.Span().Start
+		if typ == token.If {
+			left, err = p.parseTernary(left, start)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 		operatorStart := p.advance()
 		operatorEnd := operatorStart
 		if operator == "not in" || operator == "is not" {
 			operatorEnd = p.advance()
 		}
 		operatorSpan := token.Span{Start: operatorStart.Span.Start, End: operatorEnd.Span.End}
+		var right ast.Expression
 		if typ == token.As || typ == token.Is {
-			right, typeErr := p.parseTypeExpression()
-			if typeErr != nil {
-				return nil, typeErr
-			}
-			left = &ast.BinaryExpression{
-				Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, OperatorSpan: operatorSpan, Right: right,
-			}
-			continue
+			// A cast and a type test read a type rather than an expression, so
+			// the level they bind at decides only where they attach.
+			right, err = p.parseTypeExpression()
+		} else {
+			right, err = p.parseExpression(precedence + 1)
 		}
-		nextMin := precedence + 1
-		if rightAssociative {
-			nextMin = precedence
-		}
-		right, err := p.parseExpression(nextMin)
 		if err != nil {
 			return nil, err
 		}
@@ -59,31 +84,39 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 			Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, OperatorSpan: operatorSpan, Right: right,
 		}
 	}
-
-	if minPrecedence == 0 && p.at(token.If) {
-		start := left.Span().Start
-		ifToken := p.advance()
-		condition, err := p.parseExpression(0)
-		if err != nil {
-			return nil, err
-		}
-		elseToken, err := p.expect(token.Else, "expected else in ternary expression")
-		if err != nil {
-			return nil, err
-		}
-		alternative, err := p.parseExpression(0)
-		if err != nil {
-			return nil, err
-		}
-		left = &ast.TernaryExpression{
-			Base: spanFrom(start, alternative.Span().End), Value: left, IfSpan: ifToken.Span,
-			Condition: condition, ElseSpan: elseToken.Span, Alternative: alternative,
-		}
-	}
 	return left, nil
 }
 
+// parseTernary reads the rest of "value if condition else alternative", whose
+// "if" the caller has found but not consumed. Godot reads both the condition and
+// the alternative at the conditional's own level, which lets the alternative
+// hold another conditional without parentheses.
+func (p *parser) parseTernary(value ast.Expression, start token.Position) (ast.Expression, error) {
+	ifToken := p.advance()
+	condition, err := p.parseExpression(ast.PrecedenceTernary)
+	if err != nil {
+		return nil, err
+	}
+	p.takeStrayComments()
+	elseToken, err := p.expect(token.Else, "expected else in ternary expression")
+	if err != nil {
+		return nil, err
+	}
+	alternative, err := p.parseExpression(ast.PrecedenceTernary)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.TernaryExpression{
+		Base: spanFrom(start, alternative.Span().End), Value: value, IfSpan: ifToken.Span,
+		Condition: condition, ElseSpan: elseToken.Span, Alternative: alternative,
+	}, nil
+}
+
 func (p *parser) parsePrefix() (ast.Expression, error) {
+	// An operand may be pushed onto the next line by a comment wherever brackets
+	// keep the expression open. The comment belongs to no part of the expression,
+	// so it is held for the end of the statement.
+	p.takeStrayComments()
 	tok := p.advance()
 	switch tok.Type {
 	case token.Identifier:
@@ -111,11 +144,7 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 	case token.Null:
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.NullLiteral, Raw: tok.Lexeme}, nil
 	case token.Minus, token.Plus, token.Not, token.Bang, token.Tilde, token.Await:
-		operandPrecedence := 11
-		if tok.Type == token.Not {
-			operandPrecedence = 3
-		}
-		operand, err := p.parseExpression(operandPrecedence)
+		operand, err := p.parseExpression(ast.UnaryOperandPrecedence(tok.Lexeme))
 		if err != nil {
 			return nil, err
 		}
@@ -123,55 +152,98 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 			Base: spanFrom(tok.Span.Start, operand.Span().End), Operator: tok.Lexeme, OperatorSpan: tok.Span, Operand: operand,
 		}, nil
 	case token.LParen:
-		expr, err := p.parseExpression(0)
+		p.pushMultiline(true)
+		expr, err := p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
+		p.popMultiline()
 		if _, err := p.expect(token.RParen, "expected ')' after expression"); err != nil {
 			return nil, err
 		}
 		return expr, nil
 	case token.LBracket:
+		p.pushMultiline(true)
 		return p.parseArray(tok)
 	case token.LBrace:
+		p.pushMultiline(true)
 		return p.parseDictionary(tok)
 	case token.Dollar, token.Percent:
 		return p.parseNodePath(tok)
 	case token.Func:
 		return p.parseLambda(tok)
+	case token.Self:
+		// Godot models self, super and preload as keywords rather than as
+		// names, but each one is spelled exactly as a name is, so each is kept
+		// as an identifier here and the grammar around it is what differs. No
+		// variable can carry one of these names, so the spelling stays
+		// unambiguous.
+		return &ast.Identifier{Base: base(tok.Span), Name: tok.Lexeme}, nil
+	case token.Super:
+		return p.parseSuper(tok)
+	case token.Preload:
+		return p.parsePreload(tok)
 	default:
-		if isNameToken(tok, declaredName) {
+		// Godot rewrites a keyword that may stand for an identifier into one
+		// before it looks for a prefix rule, so "match" and "when" name a value
+		// here as well as a declaration.
+		if token.IsIdentifier(tok.Type) {
 			return &ast.Identifier{Base: base(tok.Span), Name: tok.Lexeme}, nil
 		}
 		return nil, p.error(tok, "expected expression")
 	}
 }
 
+// parseSuper parses the "super" of a parent call, which Godot writes either as
+// super(arguments), calling the parent's version of the current function, or as
+// super.name(arguments). The call itself is read as a postfix, so this only has
+// to reject a "super" that names no call.
+func (p *parser) parseSuper(keyword token.Token) (ast.Expression, error) {
+	expr := ast.Expression(&ast.Identifier{Base: base(keyword.Span), Name: keyword.Lexeme})
+	if p.match(token.Dot) {
+		name, err := p.expectIdentifier("expected function name after '.'")
+		if err != nil {
+			return nil, err
+		}
+		expr = &ast.MemberExpression{
+			Base: spanFrom(keyword.Span.Start, name.Span.End), Object: expr,
+			Property: name.Lexeme, PropertySpan: name.Span,
+		}
+	}
+	if !p.at(token.LParen) {
+		return nil, p.error(p.peek(), "expected '(' after super call")
+	}
+	return expr, nil
+}
+
+// parsePreload parses preload(path), which Godot reads as a keyword taking
+// exactly one argument rather than as a call to a function of that name.
+func (p *parser) parsePreload(keyword token.Token) (ast.Expression, error) {
+	if !p.at(token.LParen) {
+		return nil, p.error(p.peek(), "expected '(' after preload")
+	}
+	p.advance()
+	p.pushMultiline(true)
+	callee := ast.Expression(&ast.Identifier{Base: base(keyword.Span), Name: keyword.Lexeme})
+	arguments, comments, end, err := p.parseArguments()
+	if err != nil {
+		return nil, err
+	}
+	if len(arguments) != 1 {
+		return nil, p.error(keyword, "preload takes one path")
+	}
+	return &ast.CallExpression{
+		Base: spanFrom(keyword.Span.Start, end.Span.End), Callee: callee,
+		Arguments: arguments, Comments: comments,
+	}, nil
+}
+
 func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 	for {
 		switch {
 		case p.match(token.LParen):
-			var arguments []ast.Expression
-			var comments []ast.CollectionComment
-			p.takeCollectionComments(&comments, 0)
-			if !p.at(token.RParen) {
-				for {
-					arg, err := p.parseExpression(0)
-					if err != nil {
-						return nil, err
-					}
-					arguments = append(arguments, arg)
-					p.takeCollectionComments(&comments, len(arguments))
-					if !p.match(token.Comma) {
-						break
-					}
-					p.takeCollectionComments(&comments, len(arguments))
-					if p.at(token.RParen) {
-						break
-					}
-				}
-			}
-			end, err := p.expect(token.RParen, "expected ')' after arguments")
+			p.pushMultiline(true)
+			arguments, comments, end, err := p.parseArguments()
 			if err != nil {
 				return nil, err
 			}
@@ -180,7 +252,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 				Arguments: arguments, Comments: comments,
 			}
 		case p.match(token.Dot):
-			property, err := p.expectName(memberName, "expected property name after '.'")
+			property, err := p.expectNodeName("expected property name after '.'")
 			if err != nil {
 				return nil, err
 			}
@@ -189,10 +261,12 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 				Property: property.Lexeme, PropertySpan: property.Span,
 			}
 		case p.match(token.LBracket):
-			index, err := p.parseExpression(0)
+			p.pushMultiline(true)
+			index, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
+			p.popMultiline()
 			end, err := p.expect(token.RBracket, "expected ']' after subscript")
 			if err != nil {
 				return nil, err
@@ -204,13 +278,53 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 	}
 }
 
+// parseArguments reads the arguments of a call whose "(" has been consumed,
+// through the closing ")" it returns.
+func (p *parser) parseArguments() ([]ast.Expression, []ast.CollectionComment, token.Token, error) {
+	var arguments []ast.Expression
+	var comments []ast.CollectionComment
+	p.takeCollectionComments(&comments, 0)
+	if !p.at(token.RParen) {
+		for {
+			argument, err := p.parseExpression(ast.PrecedenceAssignment)
+			if err != nil {
+				return nil, nil, token.Token{}, err
+			}
+			arguments = append(arguments, argument)
+			p.takeCollectionComments(&comments, len(arguments))
+			if !p.match(token.Comma) {
+				break
+			}
+			p.takeCollectionComments(&comments, len(arguments))
+			if p.at(token.RParen) {
+				break
+			}
+		}
+	}
+	p.popMultiline()
+	end, err := p.expect(token.RParen, "expected ')' after arguments")
+	if err != nil {
+		return nil, nil, token.Token{}, err
+	}
+	return arguments, comments, end, nil
+}
+
 func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
+	// A line break inside a lambda body carries meaning even when the lambda is
+	// written inside brackets, where one otherwise would not. Godot resets the
+	// mode for the body and sets the indentation built up so far aside, so the
+	// body may open a block of its own and the enclosing lines keep theirs.
+	multilineContext := p.multiline()
+	p.pushMultiline(false)
+	if multilineContext {
+		p.scanner.PushExpressionIndentedBlock()
+	}
 	// A lambda may carry a name, which Godot reports in a stack trace instead
 	// of the anonymous placeholder.
 	name := ""
 	var nameSpan token.Span
 	if !p.at(token.LParen) {
-		named, err := p.expectName(declaredName, "expected lambda name or '(' after func")
+		named, err := p.expectIdentifier("expected lambda name or '(' after func")
 		if err != nil {
 			return nil, err
 		}
@@ -224,7 +338,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	var returnArrowSpan, returnTypeSpan token.Span
 	if p.at(token.Arrow) {
 		returnArrowSpan = p.advance().Span
-		returnType, returnTypeSpan, err = p.parseTypeUntil(token.Colon)
+		returnType, returnTypeSpan, err = p.parseType(true, nil, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -233,10 +347,33 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		}
 	}
 	inline := p.peekN(1).Type != token.Newline && p.peekN(1).Type != token.Comment
-	body, end, err := p.parseSuite()
+	previousInLambda, previousInLoop := p.inLambda, p.inLoop
+	// A lambda is a function of its own, so the rules that hold a constructor's
+	// body do not reach into one written inside it.
+	previousFunction := p.functionName
+	p.functionName = ""
+	p.inLambda = true
+	// A lambda body is outside every loop that encloses the lambda, so "break"
+	// and "continue" do not reach out of it.
+	p.inLoop = false
+	// A body about to be read has not ended, whatever an earlier lambda in the
+	// same statement left behind. Godot reads a body's first statement before it
+	// looks at the marker at all, which comes to the same thing.
+	p.lambdaEnded = false
+	body, end, err := p.parseSuiteFor(true, false)
+	p.inLambda, p.inLoop, p.functionName = previousInLambda, previousInLoop, previousFunction
 	if err != nil {
 		return nil, err
 	}
+	p.popMultiline()
+	if multilineContext {
+		p.scanner.PopExpressionIndentedBlock()
+	}
+	// The body is over, whether it ended at a dedent or at the first thing that
+	// could not continue it. Either way the statement holding the lambda may end
+	// here, which is what lambdaEnded carries. It is marked after the body's own
+	// multiline frame is popped, since popping one forgets such a mark.
+	p.lambdaEnded = true
 	return &ast.LambdaExpression{
 		Base: spanFrom(start.Span.Start, end), Name: name, NameSpan: nameSpan,
 		Parameters: parameters, ReturnType: returnType,
@@ -245,44 +382,22 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	}, nil
 }
 
+// parseTypeExpression reads the type that "as" or "is" tests against, which is
+// the same grammar a declaration's type uses, minus "void".
 func (p *parser) parseTypeExpression() (ast.Expression, error) {
 	start := p.peek()
-	if !isNameToken(start, declaredName) {
+	name, span, err := p.parseType(false, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	if name == "" {
 		return nil, p.error(start, "expected type name")
 	}
-	var name strings.Builder
-	name.WriteString(p.advance().Lexeme)
-	for p.match(token.Dot) {
-		part, err := p.expectName(declaredName, "expected type name after '.'")
-		if err != nil {
-			return nil, err
-		}
-		name.WriteByte('.')
-		name.WriteString(part.Lexeme)
-	}
-	if p.match(token.LBracket) {
-		name.WriteByte('[')
-		for {
-			argument, err := p.parseTypeExpression()
-			if err != nil {
-				return nil, err
-			}
-			name.WriteString(argument.(*ast.TypeExpression).Name)
-			if !p.match(token.Comma) {
-				break
-			}
-			name.WriteString(", ")
-		}
-		if _, err := p.expect(token.RBracket, "expected ']' after type arguments"); err != nil {
-			return nil, err
-		}
-		name.WriteByte(']')
-	}
-	return &ast.TypeExpression{Base: spanFrom(start.Span.Start, p.previous().Span.End), Name: name.String()}, nil
+	return &ast.TypeExpression{Base: base(span), Name: name}, nil
 }
 
 func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
-	return p.parseArrayOf(start, func() (ast.Expression, error) { return p.parseExpression(0) })
+	return p.parseArrayOf(start, func() (ast.Expression, error) { return p.parseExpression(ast.PrecedenceAssignment) })
 }
 
 // parseArrayOf parses a bracketed element list, reading each element with
@@ -309,6 +424,7 @@ func (p *parser) parseArrayOf(start token.Token, parseElement func() (ast.Expres
 			}
 		}
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RBracket, "expected ']' after array")
 	if err != nil {
 		return nil, err
@@ -319,7 +435,7 @@ func (p *parser) parseArrayOf(start token.Token, parseElement func() (ast.Expres
 }
 
 func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
-	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(0) }, true)
+	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(ast.PrecedenceAssignment) }, true)
 }
 
 // parseDictionaryOf parses a braced entry list, reading each value with
@@ -333,7 +449,7 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RBrace) {
 		for {
-			key, err := p.parseExpression(0)
+			key, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
@@ -359,6 +475,7 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 			}
 		}
 	}
+	p.popMultiline()
 	end, err := p.expect(token.RBrace, "expected '}' after dictionary")
 	if err != nil {
 		return nil, err
@@ -369,56 +486,77 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 	}, nil
 }
 
+// pathStep says how much of a node path has been read, which is what decides
+// whether a "/" or a "%" may come next.
+type pathStep int
+
+const (
+	// pathStart is the position right after the "$" or "%" that opens the path.
+	pathStart pathStep = iota
+	// pathSlash follows a "/" separator.
+	pathSlash
+	// pathPercent follows the "%" that marks the next name as unique.
+	pathPercent
+	// pathName follows a node name, whether written bare or as a string.
+	pathName
+)
+
+// parseNodePath parses the $Node/Child and %UniqueNode shorthand. Godot reads
+// the path as names separated by "/", where a name may be written bare or as a
+// string, and where a "%" before a name marks that one node as unique. Nearly
+// every keyword may name a node, so the path keeps its own predicate rather
+// than the one a declared name uses.
 func (p *parser) parseNodePath(start token.Token) (ast.Expression, error) {
 	var path strings.Builder
 	var pathSpan token.Span
-	if p.at(token.String) {
-		value := p.advance()
-		path.WriteString(value.Lexeme)
-		pathSpan = value.Span
-	} else {
-		for p.at(token.Identifier, token.Slash) {
-			part := p.advance()
-			path.WriteString(part.Lexeme)
-			if pathSpan == (token.Span{}) {
-				pathSpan.Start = part.Span.Start
-			}
-			pathSpan.End = part.Span.End
+	write := func(tok token.Token, text string) {
+		path.WriteString(text)
+		if pathSpan == (token.Span{}) {
+			pathSpan.Start = tok.Span.Start
 		}
+		pathSpan.End = tok.Span.End
 	}
-	if path.Len() == 0 {
-		return nil, p.error(p.peek(), "expected node path")
+	step := pathStart
+	if start.Type == token.Dollar && p.at(token.Slash) {
+		// A path may be written from the scene root, as in $/root/Main.
+		write(p.advance(), "/")
+		step = pathSlash
 	}
-	return &ast.NodePathExpression{
-		Base: spanFrom(start.Span.Start, p.previous().Span.End), Path: path.String(), PathSpan: pathSpan,
-		Unique: start.Type == token.Percent, PrefixSpan: start.Span,
-	}, nil
-}
-
-func infixPrecedence(typ token.Type) (int, bool) {
-	switch typ {
-	case token.Or:
-		return 1, false
-	case token.And:
-		return 2, false
-	case token.Equal, token.NotEqual, token.Less, token.LessEqual, token.Greater, token.GreaterEqual, token.In, token.Is, token.As:
-		return 3, false
-	case token.Pipe:
-		return 4, false
-	case token.Caret:
-		return 5, false
-	case token.Ampersand:
-		return 6, false
-	case token.ShiftLeft, token.ShiftRight:
-		return 7, false
-	case token.Plus, token.Minus:
-		return 8, false
-	case token.Star, token.Slash, token.Percent:
-		return 9, false
-	case token.DoubleStar:
-		return 10, true
-	default:
-		return -1, false
+	for {
+		switch {
+		case p.at(token.String):
+			tok := p.advance()
+			write(tok, tok.Lexeme)
+			step = pathName
+		case token.IsNodeName(p.peek().Type):
+			tok := p.advance()
+			write(tok, tok.Lexeme)
+			step = pathName
+		case !p.at(token.Slash, token.Percent):
+			return nil, p.error(p.peek(), "expected node path")
+		}
+		switch {
+		case p.at(token.Slash):
+			if step != pathStart && step != pathName {
+				return nil, p.error(p.peek(), "'/' may only separate node names in a node path")
+			}
+			write(p.advance(), "/")
+			step = pathSlash
+		case p.at(token.Percent):
+			if step != pathStart && step != pathSlash {
+				return nil, p.error(p.peek(), "'%' may only begin a node name in a node path")
+			}
+			write(p.advance(), "%")
+			step = pathPercent
+		default:
+			if path.Len() == 0 || step != pathName {
+				return nil, p.error(p.peek(), "expected node path")
+			}
+			return &ast.NodePathExpression{
+				Base: spanFrom(start.Span.Start, p.previous().Span.End), Path: path.String(), PathSpan: pathSpan,
+				Unique: start.Type == token.Percent, PrefixSpan: start.Span,
+			}, nil
+		}
 	}
 }
 
@@ -447,12 +585,7 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 	switch {
 	case p.at(token.Var):
 		keyword := p.advance()
-		// The wildcard "_" names nothing, so Godot rejects it here even though
-		// it is a pattern of its own.
-		if !isNameToken(p.peek(), declaredName) || p.peek().Lexeme == "_" {
-			return nil, p.error(p.peek(), "expected bind name after 'var'")
-		}
-		name, err := p.expectName(declaredName, "expected bind name after 'var'")
+		name, err := p.expectIdentifier("expected bind name after 'var'")
 		if err != nil {
 			return nil, err
 		}
@@ -460,12 +593,99 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 			Base: spanFrom(keyword.Span.Start, name.Span.End), Name: name.Lexeme,
 			NameSpan: name.Span, KeywordSpan: keyword.Span,
 		}, nil
+	case p.at(token.Underscore):
+		keyword := p.advance()
+		return &ast.WildcardPattern{Base: base(keyword.Span)}, nil
+	case p.at(token.DotDot):
+		keyword := p.advance()
+		return &ast.RestPattern{Base: base(keyword.Span)}, nil
 	case p.at(token.LBracket):
-		return p.parseArrayOf(p.advance(), p.parsePattern)
+		opener := p.advance()
+		p.pushMultiline(true)
+		return p.parseArrayPattern(opener)
 	case p.at(token.LBrace):
-		return p.parseDictionaryOf(p.advance(), p.parsePattern, false)
+		opener := p.advance()
+		p.pushMultiline(true)
+		return p.parseDictionaryPattern(opener)
 	}
-	return p.parseExpression(0)
+	return p.parseExpression(ast.PrecedenceAssignment)
+}
+
+// parseDictionaryPattern parses a braced dictionary pattern, whose "{" has been
+// consumed. It differs from a dictionary literal in three ways: a key may stand
+// alone, which tests only that the key is present; ".." may stand in for the
+// entries the pattern does not list; and the "{key = value}" spelling has no
+// pattern form, so an entry is always written with a colon.
+// parseArrayPattern parses a bracketed array pattern, whose "[" has been
+// consumed. Its elements are patterns, and ".." may stand in for the elements
+// the pattern does not list, as the last one.
+func (p *parser) parseArrayPattern(start token.Token) (ast.Expression, error) {
+	rest := false
+	array, err := p.parseArrayOf(start, func() (ast.Expression, error) {
+		if rest {
+			return nil, p.error(p.peek(), "the '..' pattern must be the last element of an array pattern")
+		}
+		element, elementErr := p.parsePattern()
+		if elementErr != nil {
+			return nil, elementErr
+		}
+		_, rest = element.(*ast.RestPattern)
+		return element, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return array, nil
+}
+
+func (p *parser) parseDictionaryPattern(start token.Token) (ast.Expression, error) {
+	var entries []ast.DictionaryEntry
+	var comments []ast.CollectionComment
+	rest := false
+	p.takeCollectionComments(&comments, 0)
+	for !p.at(token.RBrace) {
+		if rest {
+			return nil, p.error(p.peek(), "the '..' pattern must be the last entry of a dictionary pattern")
+		}
+		if p.at(token.DotDot) {
+			// The rest is held as an entry whose key is the ".." itself, so that
+			// an entry with no value is written as its key alone either way.
+			keyword := p.advance()
+			entries = append(entries, ast.DictionaryEntry{Key: &ast.RestPattern{Base: base(keyword.Span)}})
+			rest = true
+		} else {
+			key, err := p.parseExpression(ast.PrecedenceAssignment)
+			if err != nil {
+				return nil, err
+			}
+			entry := ast.DictionaryEntry{Key: key}
+			if p.at(token.Colon) {
+				entry.SeparatorSpan = p.advance().Span
+				value, valueErr := p.parsePattern()
+				if valueErr != nil {
+					return nil, valueErr
+				}
+				if _, isRest := value.(*ast.RestPattern); isRest {
+					return nil, p.error(p.previous(), "the '..' pattern cannot stand for a value")
+				}
+				entry.Value = value
+			}
+			entries = append(entries, entry)
+		}
+		p.takeCollectionComments(&comments, len(entries))
+		if !p.match(token.Comma) {
+			break
+		}
+		p.takeCollectionComments(&comments, len(entries))
+	}
+	p.popMultiline()
+	end, err := p.expect(token.RBrace, "expected '}' after dictionary pattern")
+	if err != nil {
+		return nil, err
+	}
+	return &ast.DictionaryLiteral{
+		Base: spanFrom(start.Span.Start, end.Span.End), Entries: entries, Comments: comments,
+	}, nil
 }
 
 // dictionarySeparator reads the ":" or "=" that follows a dictionary key. A

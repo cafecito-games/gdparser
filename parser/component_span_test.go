@@ -22,7 +22,7 @@ static var value: Array[Dictionary[String, int]] = source.member:
 		value = next_value
 static func transform(input: Dictionary[String, Array[int]] = defaults) -> Array[Vector2]:
 	var callback = func(item: Array[int] = defaults) -> Dictionary[String, int]: return item
-class Inner extends Base.Generic[Thing]:
+class Inner extends Base.Generic:
 	signal changed(payload: int)
 `)
 	file := parseSpans(t, source)
@@ -77,7 +77,7 @@ class Inner extends Base.Generic[Thing]:
 	assertSpan(t, source, class.KeywordSpan, "class")
 	assertSpan(t, source, class.NameSpan, "Inner")
 	assertSpan(t, source, class.ExtendsSpan, "extends")
-	assertSpan(t, source, class.BaseTypeSpan, "Base.Generic[Thing]")
+	assertSpan(t, source, class.BaseTypeSpan, "Base.Generic")
 	signal := class.Body[0].(*ast.SignalDeclaration)
 	assertSpan(t, source, signal.KeywordSpan, "signal")
 	assertSpan(t, source, signal.NameSpan, "changed")
@@ -114,9 +114,9 @@ func TestControlFlowComponentSpans(t *testing.T) {
 	if first:
 		pass
 	elif second:
-		break
+		breakpoint
 	elif third:
-		continue
+		pass
 	else:
 		pass
 	while running:
@@ -138,8 +138,8 @@ func TestControlFlowComponentSpans(t *testing.T) {
 		overall string
 	}{
 		{"if", "if first:\n\t\tpass"},
-		{"elif", "elif second:\n\t\tbreak"},
-		{"elif", "elif third:\n\t\tcontinue"},
+		{"elif", "elif second:\n\t\tbreakpoint"},
+		{"elif", "elif third:\n\t\tpass"},
 	}
 	for i, want := range branchWants {
 		assertSpan(t, source, conditional.Branches[i].KeywordSpan, want.keyword)
@@ -147,7 +147,7 @@ func TestControlFlowComponentSpans(t *testing.T) {
 	}
 	assertSpan(t, source, conditional.ElseKeywordSpan, "else")
 	assertSpan(t, source, conditional.ElseSpan, "else:\n\t\tpass")
-	assertSpan(t, source, conditional.Branches[1].Body[0].(*ast.KeywordStatement).KeywordSpan, "break")
+	assertSpan(t, source, conditional.Branches[1].Body[0].(*ast.KeywordStatement).KeywordSpan, "breakpoint")
 
 	while := function.Body[1].(*ast.WhileStatement)
 	assertSpan(t, source, while.KeywordSpan, "while")
@@ -216,10 +216,10 @@ func TestRepeatedUnicodeAndMultilineComponentSpans(t *testing.T) {
 }
 
 func TestAdjacentScalarAndOptionalComponentSpans(t *testing.T) {
-	source := []byte("tool\nvar property: int:\n\tset:\n\t\tvar path = %Root/Child\n")
+	source := []byte("extends Node\nvar property: int:\n\tset:\n\t\tvar path = %Root/Child\n")
 	file := parseSpans(t, source)
 	directive := file.Statements[0].(*ast.Directive)
-	assertSpan(t, source, directive.KeywordSpan, "tool")
+	assertSpan(t, source, directive.KeywordSpan, "extends")
 	assertZeroSpan(t, directive.ExtendsSpan)
 
 	declaration := file.Statements[1].(*ast.VariableDeclaration)
