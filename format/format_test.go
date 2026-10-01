@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cafecito-games/gdparser/ast"
 	"github.com/cafecito-games/gdparser/format"
 	"github.com/cafecito-games/gdparser/parser"
 )
@@ -486,5 +487,93 @@ func TestCollectionCommentPlacement(t *testing.T) {
 				t.Errorf("formatted = %q, want %q", formatted, test.want)
 			}
 		})
+	}
+}
+
+// TestCommentInsideAnInlineLambdaBody covers the comment an inline lambda body
+// may hold. A comment ends its line, so it stays at the end of the one-line
+// form, and nothing may share that line after it — not even a closing bracket,
+// which is why the construct around it breaks however short it is.
+func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "a declaration's value",
+			source: "var f = func(): return 1  # c\n",
+			want:   "var f = func(): return 1  # c\n",
+		},
+		{
+			name:   "two statements before the comment",
+			source: "var f = func(): print(1); return 1  # c\n",
+			want:   "var f = func(): print(1); return 1  # c\n",
+		},
+		{
+			name:   "a parameter's default value",
+			source: "func g(b, a = func(): return 1  # c\n):\n\tpass\n",
+			want:   "func g(\n\t\tb,\n\t\ta = func(): return 1  # c\n):\n\tpass\n",
+		},
+		{
+			name:   "an array element",
+			source: "var x = [func(): return 1  # c\n, 2]\n",
+			want:   "var x = [\n\tfunc(): return 1  # c\n\t,\n\t2,\n]\n",
+		},
+		{
+			name:   "a call argument",
+			source: "func w():\n\tg(func(): return 1  # c\n\t)\n",
+			want:   "func w():\n\tg(\n\t\t\tfunc(): return 1  # c\n\t)\n",
+		},
+		{
+			name:   "a dictionary value",
+			source: "var d = {\"k\": func(): return 1  # c\n}\n",
+			want:   "var d = {\n\t\"k\": func(): return 1  # c\n}\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("inline.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+			again, err := parser.Parse("inline.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+			if reformatted := format.File(again); reformatted != formatted {
+				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
+			}
+		})
+	}
+}
+
+// A lambda whose body the one-line form cannot hold is written out instead of
+// reaching the inline printer, which supports only what a line can hold.
+func TestInlineLambdaFallsBackToABlock(t *testing.T) {
+	file, err := parser.Parse("inline.gd", []byte("var f = func(): return 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lambda := file.Statements[0].(*ast.VariableDeclaration).Value.(*ast.LambdaExpression)
+	if !lambda.Inline {
+		t.Fatal("the lambda should have been read as inline")
+	}
+	// A statement no single line can hold, as a tree built by hand may carry.
+	lambda.Body = append(lambda.Body, &ast.IfStatement{
+		Branches: []ast.Branch{{
+			Condition: &ast.Identifier{Name: "ready"},
+			Body:      []ast.Statement{&ast.KeywordStatement{Keyword: "pass"}},
+		}},
+	})
+	formatted := format.File(file)
+	if !strings.Contains(formatted, "\n") || strings.Contains(formatted, "; if") {
+		t.Fatalf("the body should have been written out:\n%s", formatted)
+	}
+	if _, err := parser.Parse("inline.gd", []byte(formatted)); err != nil {
+		t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
 	}
 }

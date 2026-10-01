@@ -373,6 +373,17 @@ var (
 	enumLayout       = layout{open: "{", close: "}", levels: 1, trailingComma: true, padFlat: true}
 )
 
+// holdsAnyLastLine reports whether any item ends in a comment, which holds the
+// rest of its line.
+func holdsAnyLastLine(items []doc) bool {
+	for _, item := range items {
+		if endsWithLineComment(item) {
+			return true
+		}
+	}
+	return false
+}
+
 // collection renders items inside brackets, on one line when they fit and one
 // per line otherwise. Comments written between the brackets are anchored to the
 // items they were written against.
@@ -412,11 +423,18 @@ func (p *printer) collection(shape layout, items []doc, comments []ast.Collectio
 	if shape.padFlat {
 		pad = ifBroken(text(""), text(" "))
 	}
+	// An item ending in a comment cannot share its line with what follows it,
+	// not even the closing bracket, so the construct breaks however short it
+	// is.
+	opening, closing := doc(softLine), doc(softLine)
+	if holdsAnyLastLine(items) {
+		opening, closing = hardLine, hardLine
+	}
 	return group(concat(
 		text(shape.open),
 		pad,
-		nest(shape.levels, concat(softLine, concat(separated...), tail)),
-		softLine,
+		nest(shape.levels, concat(opening, concat(separated...), tail)),
+		closing,
 		pad,
 		text(shape.close),
 	))
@@ -630,12 +648,19 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 			header = concat(header, text(" -> "+node.ReturnType))
 		}
 		var inner doc
-		if node.Inline {
-			statements := make([]doc, len(node.Body))
-			for index, statement := range node.Body {
+		// A comment ends the line it is written on, so an inline body may hold
+		// one only as its last statement, where it stays at the end of the
+		// line. A body the single-line form cannot hold is written out instead.
+		body, trailing := splitTrailingComment(node.Body)
+		if node.Inline && len(body) > 0 && inlinable(body) {
+			statements := make([]doc, len(body))
+			for index, statement := range body {
 				statements[index] = p.inlineStatement(statement)
 			}
 			inner = concat(header, text(": "), join(text("; "), statements))
+			if trailing != nil {
+				inner = concat(inner, text("  "+p.commentText(trailing)))
+			}
 		} else {
 			inner = concat(header, text(":"), p.suite(node.Body))
 		}
@@ -648,7 +673,35 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 	}
 }
 
-// inlineStatement renders a statement inside a single-line lambda body.
+// splitTrailingComment separates a trailing comment from the statements before
+// it, which is how a comment reaches an inline lambda body.
+func splitTrailingComment(body []ast.Statement) ([]ast.Statement, *ast.Comment) {
+	if len(body) == 0 {
+		return body, nil
+	}
+	comment, ok := body[len(body)-1].(*ast.Comment)
+	if !ok {
+		return body, nil
+	}
+	return body[:len(body)-1], comment
+}
+
+// inlinable reports whether every statement of body can be written on one line.
+func inlinable(body []ast.Statement) bool {
+	for _, statement := range body {
+		switch statement.(type) {
+		case *ast.ExpressionStatement, *ast.Assignment, *ast.ReturnStatement,
+			*ast.KeywordStatement, *ast.VariableDeclaration:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// inlineStatement renders a statement inside a single-line lambda body. Only a
+// statement inlinable reports on reaches it, so the panic marks a tree the
+// formatter does not support rather than input it cannot format.
 func (p *printer) inlineStatement(statement ast.Statement) doc {
 	switch statement.(type) {
 	case *ast.ExpressionStatement, *ast.Assignment, *ast.ReturnStatement,
