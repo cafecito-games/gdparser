@@ -52,6 +52,21 @@ func TestVariadicParameter(t *testing.T) {
 			want:   "func a(\n\t\tfirst,\n\t\t# note\n\t\t...rest\n):\n\tpass\n",
 		},
 		{
+			name:   "a named lambda with a rest parameter",
+			source: "var f = func named(...rest):\n\treturn rest\n",
+			want:   "var f = func named(...rest):\n\treturn rest\n",
+		},
+		{
+			name:   "a static function with a rest parameter",
+			source: "static func a(...rest):\n\tpass\n",
+			want:   "static func a(...rest):\n\tpass\n",
+		},
+		{
+			name:   "a trailing comma after a rest parameter",
+			source: "func a(...rest,):\n\tpass\n",
+			want:   "func a(...rest):\n\tpass\n",
+		},
+		{
 			name:   "a rest parameter beside a default",
 			source: "func a(first = 1, ...rest):\n\tpass\n",
 			want:   "func a(first = 1, ...rest):\n\tpass\n",
