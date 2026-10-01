@@ -437,7 +437,12 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 	switch {
 	case p.at(token.Var):
 		keyword := p.advance()
-		name, err := p.expectName("expected name after 'var' in a match pattern")
+		// A bind name is a plain identifier. The wildcard "_" names nothing, so
+		// Godot rejects it here even though it is a pattern of its own.
+		if p.peek().Type != token.Identifier || p.peek().Lexeme == "_" {
+			return nil, p.error(p.peek(), "expected bind name after 'var'")
+		}
+		name, err := p.expectName("expected bind name after 'var'")
 		if err != nil {
 			return nil, err
 		}

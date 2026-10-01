@@ -550,6 +550,7 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			continue
 		}
 		matchCase := ast.MatchCase{}
+		var comma token.Token
 		for {
 			pattern, err := p.parsePattern()
 			if err != nil {
@@ -559,8 +560,18 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			if len(matchCase.Patterns) == 1 {
 				matchCase.SourceSpan.Start = pattern.Span().Start
 			}
-			if !p.match(token.Comma) {
+			if !p.at(token.Comma) {
 				break
+			}
+			comma = p.advance()
+		}
+		// A branch that binds the matched value may hold no other pattern,
+		// because the other patterns would leave the name unbound.
+		if len(matchCase.Patterns) > 1 {
+			for _, pattern := range matchCase.Patterns {
+				if _, ok := pattern.(*ast.BindingPattern); ok {
+					return nil, p.error(comma, "a variable bind may not be combined with another pattern")
+				}
 			}
 		}
 		if p.at(token.Identifier) && p.peek().Lexeme == "when" {

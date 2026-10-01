@@ -21,9 +21,14 @@ func TestMatchBindingPattern(t *testing.T) {
 			want:   "func a(x):\n\tmatch x:\n\t\tvar captured:\n\t\t\tpass\n",
 		},
 		{
-			name:   "a binding beside another pattern",
-			source: "func a(x):\n\tmatch x:\n\t\t1, var c:\n\t\t\tpass\n",
-			want:   "func a(x):\n\tmatch x:\n\t\t1, var c:\n\t\t\tpass\n",
+			name:   "several patterns without a binding",
+			source: "func a(x):\n\tmatch x:\n\t\t1, 2:\n\t\t\tpass\n",
+			want:   "func a(x):\n\tmatch x:\n\t\t1, 2:\n\t\t\tpass\n",
+		},
+		{
+			name:   "a binding named like the contextual when keyword",
+			source: "func a(x):\n\tmatch x:\n\t\tvar when:\n\t\t\tpass\n",
+			want:   "func a(x):\n\tmatch x:\n\t\tvar when:\n\t\t\tpass\n",
 		},
 		{
 			name:   "a binding with a guard",
@@ -95,8 +100,10 @@ func TestMatchBindingPatternNode(t *testing.T) {
 	}
 }
 
-// A binding belongs to a pattern, so it stays rejected everywhere else.
-func TestBindingIsNotAnExpression(t *testing.T) {
+// Each of these is rejected by Godot, so the parser rejects it too, with a
+// position. A binding belongs to a pattern, binds exactly one name, and may not
+// share its branch with another pattern that would leave that name unbound.
+func TestBindingPatternRejections(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		source string
@@ -105,6 +112,12 @@ func TestBindingIsNotAnExpression(t *testing.T) {
 		{"a call argument inside a pattern", "func a(x):\n\tmatch x:\n\t\tf(var z):\n\t\t\tpass\n"},
 		{"an operand inside a pattern", "func a(x):\n\tmatch x:\n\t\t1 + var z:\n\t\t\tpass\n"},
 		{"a guard", "func a(x):\n\tmatch x:\n\t\t1 when var z:\n\t\t\tpass\n"},
+		{"a binding before another pattern", "func a(x):\n\tmatch x:\n\t\tvar c, 1:\n\t\t\tpass\n"},
+		{"a binding after another pattern", "func a(x):\n\tmatch x:\n\t\t1, var c:\n\t\t\tpass\n"},
+		{"two bindings in one branch", "func a(x):\n\tmatch x:\n\t\tvar a, var b:\n\t\t\tpass\n"},
+		{"the wildcard as a bind name", "func a(x):\n\tmatch x:\n\t\tvar _:\n\t\t\tpass\n"},
+		{"a keyword as a bind name", "func a(x):\n\tmatch x:\n\t\tvar if:\n\t\t\tpass\n"},
+		{"no name after var", "func a(x):\n\tmatch x:\n\t\tvar:\n\t\t\tpass\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := parser.Parse("match.gd", []byte(test.source)); err == nil {
