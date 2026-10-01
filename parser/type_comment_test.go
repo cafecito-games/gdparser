@@ -57,6 +57,11 @@ func TestCommentAfterAType(t *testing.T) {
 			want:   "func f(\n\t\ta,\n\t\tb: int  # c\n):\n\tpass\n",
 		},
 		{
+			name:   "a comment before a rest parameter's type",
+			source: "func f(...rest: # c\n\t\tArray):\n\tpass\n",
+			want:   "func f(\n\t\t...rest: Array  # c\n):\n\tpass\n",
+		},
+		{
 			name:   "a comment interrupting a signal parameter",
 			source: "signal s(a: # c\n\t\tint)\n",
 			want:   "signal s(\n\t\ta: int  # c\n)\n",
