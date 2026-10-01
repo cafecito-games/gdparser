@@ -32,6 +32,11 @@ func TestCommentAfterAType(t *testing.T) {
 			want:   "func f(\n\t\ta: int,  # c\n\t\tb: int\n):\n\tpass\n",
 		},
 		{
+			name:   "between a parameter's name and its colon",
+			source: "func f(a  # c\n\t\t: int):\n\tpass\n",
+			want:   "func f(\n\t\ta: int  # c\n):\n\tpass\n",
+		},
+		{
 			name:   "before a parameter's type",
 			source: "func f(a: # c\n\t\tint):\n\tpass\n",
 			want:   "func f(\n\t\ta: int  # c\n):\n\tpass\n",
