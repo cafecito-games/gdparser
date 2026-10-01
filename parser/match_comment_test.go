@@ -51,6 +51,26 @@ func TestMatchComments(t *testing.T) {
 			want:   "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t## doc\n\t\t2:\n\t\t\tpass\n",
 		},
 		{
+			name:   "a comment deeper than the case it follows",
+			source: "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t\t\t# c\n\t\t2:\n\t\t\tpass\n",
+			want:   "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t\t# c\n\t\t2:\n\t\t\tpass\n",
+		},
+		{
+			name:   "a comment in a nested match",
+			source: "func a(x, y):\n\tmatch x:\n\t\t1:\n\t\t\tmatch y:\n\t\t\t\t# inner\n\t\t\t\t2:\n\t\t\t\t\tpass\n",
+			want:   "func a(x, y):\n\tmatch x:\n\t\t1:\n\t\t\tmatch y:\n\t\t\t\t# inner\n\t\t\t\t2:\n\t\t\t\t\tpass\n",
+		},
+		{
+			name:   "a comment in a match inside a lambda inside a collection",
+			source: "var f = [func(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n]\n",
+			want:   "var f = [\n\tfunc(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass,\n]\n",
+		},
+		{
+			name:   "a comment after the last case at the end of the file",
+			source: "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t# c",
+			want:   "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t\t# c\n",
+		},
+		{
 			name:   "a comment in a case body stays there",
 			source: "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\t# c\n\t\t\tpass\n",
 			want:   "func a(x):\n\tmatch x:\n\t\t1:\n\t\t\t# c\n\t\t\tpass\n",
