@@ -381,6 +381,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	if multilineContext {
 		p.scanner.PopExpressionIndentedBlock()
 	}
+	inline = inline && fitsOneLine(body)
 	// The body is over, whether it ended at a dedent or at the first thing that
 	// could not continue it. Either way the statement holding the lambda may end
 	// here, which is what lambdaEnded carries. It is marked after the body's own
@@ -392,6 +393,45 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		ReturnTypeSpan: returnTypeSpan, ReturnArrowSpan: returnArrowSpan, KeywordSpan: start.Span,
 		Body: body, Inline: inline, ParameterComments: parameterComments,
 	}, nil
+}
+
+// fitsOneLine reports whether a lambda body written on the lambda's own line can
+// be kept there: it holds at least one statement, none of them opens a block of
+// its own, and a comment only ends it.
+func fitsOneLine(body []ast.Statement) bool {
+	if count := len(body); count > 0 {
+		if _, ok := body[count-1].(*ast.Comment); ok {
+			body = body[:count-1]
+		}
+	}
+	for _, statement := range body {
+		switch statement.(type) {
+		case *ast.ExpressionStatement, *ast.Assignment, *ast.ReturnStatement,
+			*ast.KeywordStatement, *ast.VariableDeclaration:
+		default:
+			return false
+		}
+	}
+	return len(body) > 0
+}
+
+// endsInLambda reports whether the last thing expr reads is the body of a
+// lambda, looking through the operators whose right operand ends them.
+func endsInLambda(expr ast.Expression) bool {
+	for {
+		switch node := expr.(type) {
+		case *ast.LambdaExpression:
+			return true
+		case *ast.UnaryExpression:
+			expr = node.Operand
+		case *ast.BinaryExpression:
+			expr = node.Right
+		case *ast.TernaryExpression:
+			expr = node.Alternative
+		default:
+			return false
+		}
+	}
 }
 
 // parseTypeExpression reads the type that "as" or "is" tests against, which is

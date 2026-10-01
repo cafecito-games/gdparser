@@ -214,7 +214,9 @@ type LambdaExpression struct {
 	ReturnArrowSpan token.Span  `json:"return_arrow_span,omitempty"`
 	KeywordSpan     token.Span  `json:"keyword_span,omitempty"`
 	Body            []Statement `json:"body"`
-	Inline          bool        `json:"inline,omitempty"`
+	// Inline reports that the body was written on the lambda's own line and can
+	// be kept there: it holds statements, and none of them opens a block.
+	Inline bool `json:"inline,omitempty"`
 	// ParameterComments holds the comments written inside the parameter list.
 	ParameterComments []CollectionComment `json:"parameter_comments,omitempty"`
 }

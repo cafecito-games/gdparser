@@ -153,6 +153,16 @@ func TestCommentsOnBackslashContinuedHeaderLines(t *testing.T) {
 			"func f(x):\n\tif x == 0 and (x < 1 or x > 2) and x != 3:\n\t\t# one\n\t\t# two\n\t\t# three\n\t\tpass\n",
 		},
 		{
+			"with the body on the header's line",
+			"func f(x, y):\n\tif x \\\n\t\t\t# one\n\t\t\t# two\n\t\t\tand y: pass\n",
+			"func f(x, y):\n\tif x and y:\n\t\t# one\n\t\t# two\n\t\tpass\n",
+		},
+		{
+			"with the body and a comment on the header's line",
+			"func f(x, y):\n\tif x \\\n\t\t\t# one\n\t\t\tand y: pass  # why\n",
+			"func f(x, y):\n\tif x and y:  # why\n\t\t# one\n\t\tpass\n",
+		},
+		{
 			"beside the comment that ends the header's line",
 			"func f(x):\n\tif x == 0 \\\n\t\t\t# one\n\t\t\tand x != 3:  # why\n\t\tpass\n",
 			"func f(x):\n\tif x == 0 and x != 3:  # why\n\t\t# one\n\t\tpass\n",

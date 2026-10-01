@@ -52,7 +52,11 @@ func (p *printer) statements(list []ast.Statement) doc {
 	gaps := p.blankLineGaps(list)
 	parts := make([]doc, 0, len(list)*2)
 	for index, statement := range list {
-		if index > 0 {
+		switch {
+		case index == 0:
+		case sharesNextLine(list[index-1]):
+			parts = append(parts, text(" "))
+		default:
 			for range gaps[index] + 1 {
 				parts = append(parts, hardLine)
 			}
@@ -60,6 +64,14 @@ func (p *printer) statements(list []ast.Statement) doc {
 		parts = append(parts, p.statement(statement))
 	}
 	return concat(parts...)
+}
+
+// sharesNextLine reports whether statement is an annotation written ahead of the
+// next statement on that statement's line, as "@tool extends Node" is. The style
+// guide does not prescribe where such an annotation goes, so it stays there.
+func sharesNextLine(statement ast.Statement) bool {
+	annotation, ok := statement.(*ast.Annotation)
+	return ok && !annotation.OwnLine && annotation.TrailingComment == nil
 }
 
 // body renders a suite's statements, substituting pass for an empty one.

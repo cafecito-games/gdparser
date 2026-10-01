@@ -147,6 +147,14 @@ func decoratesNothing(name string) bool {
 	return targets&(targetStandalone|targetScript) != 0
 }
 
+// sharesItsLine reports whether an annotation that decorates nothing may be
+// followed on its line by the next statement. An annotation of the script itself
+// may: parse_program applies it where it reads it and asks for nothing after it,
+// while a standalone one must end its line.
+func sharesItsLine(name string) bool {
+	return annotationTargets[name]&targetScript != 0
+}
+
 // checkAnnotationTargets reports whether every annotation ahead of statement may
 // decorate it. A statement that is no declaration takes none of them, and Godot
 // lets them stand on their own instead.

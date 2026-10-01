@@ -35,6 +35,28 @@ func TestAccessorColonOnTheLineAfterAOneLineLambda(t *testing.T) {
 			"var d = (func(): pass  # c\n\t):\n\tget = _g\n",
 		},
 		{
+			"a comment line before the colon",
+			"var d = func(): pass\n# c\n:\n\tget = _g\n",
+			"var d = func(): pass:\n\t# c\n\tget = _g\n",
+		},
+		{
+			// Only a block has room for the comment, so the accessors move
+			// into one.
+			"a comment line before accessors on the colon's line",
+			"var d = func(): pass\n# c\n: get = _g\n",
+			"var d = func(): pass:\n\t# c\n\tget = _g\n",
+		},
+		{
+			"a semicolon before the colon",
+			"var d = func(): pass\n;\n:\n\tget = _g\n",
+			"var d = func(): pass:\n\tget = _g\n",
+		},
+		{
+			"a lambda ending an operator's right operand",
+			"var d = 1 + func(): pass\n:\n\tget = _g\n",
+			"var d = 1 + (func(): pass):\n\tget = _g\n",
+		},
+		{
 			"in an inner class",
 			"class Inner:\n\tvar d = func(): pass\n\t:\n\t\tget = _g\n",
 			"class Inner:\n\tvar d = func(): pass:\n\t\tget = _g\n",
@@ -68,6 +90,10 @@ func TestAccessorColonOnTheNextLineOtherwiseBelongsToNothing(t *testing.T) {
 		"var d = 1\n:\n\tget = _g\n",
 		"var d = f(func(): pass)\n:\n\tget = _g\n",
 		"var d = [func(): pass]\n:\n\tget = _g\n",
+		// A lambda the value moved on from took no line break of the value's.
+		"var d = 1 if func(): pass else 2\n:\n\tget = _g\n",
+		// A constant reads no accessors.
+		"const d = func(): pass\n:\n\tget = _g\n",
 		// The colon has to stand where the declaration does.
 		"var d = func(): pass\n\t:\n\t\tget = _g\n",
 		// A local is no property.
