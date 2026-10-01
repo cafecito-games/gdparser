@@ -139,7 +139,9 @@ func (p *printer) statement(statement ast.Statement) doc {
 
 func (p *printer) annotation(node *ast.Annotation) doc {
 	document := doc(text("@" + node.Name))
-	if node.Arguments != nil {
+	// An argument list that holds only comments still has to be written out,
+	// or those comments are lost.
+	if node.Arguments != nil || len(node.Comments) > 0 {
 		arguments := make([]doc, len(node.Arguments))
 		for index, argument := range node.Arguments {
 			arguments[index] = p.expression(argument, 0)
@@ -190,7 +192,7 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 		return concat(text(header+":"), p.suite(node.Body))
 	case *ast.SignalDeclaration:
 		document := doc(text("signal " + node.Name))
-		if node.Parameters != nil {
+		if node.Parameters != nil || len(node.ParameterComments) > 0 {
 			document = concat(document, p.parameterList(node.Parameters, node.ParameterComments))
 		}
 		return document
@@ -407,12 +409,11 @@ func (p *printer) commentedCollection(shape layout, items []doc, comments []ast.
 		lines = append(lines, text(p.commentText(comment)))
 	}
 	opening := []doc{text(shape.open)}
-	// A comment written on the opening line stays there, since no item precedes
-	// it to hold it.
-	if len(items) > 0 || len(lines) == 0 {
-		for _, comment := range ast.CollectionCommentsAt(comments, 0, true) {
-			opening = append(opening, text("  "+p.commentText(comment)))
-		}
+	// A comment that ended the opening line stays there: no item precedes it to
+	// hold it, and the loop above only reaches a trailing comment that follows
+	// an item.
+	for _, comment := range ast.CollectionCommentsAt(comments, 0, true) {
+		opening = append(opening, text("  "+p.commentText(comment)))
 	}
 	if len(lines) == 0 {
 		return concat(concat(opening...), hardLine, text(shape.close))

@@ -460,6 +460,21 @@ func TestCollectionCommentPlacement(t *testing.T) {
 			source: "enum E {\n\tA,\n\t# c\n}\n",
 			want:   "enum E {\n\tA,\n\t# c\n}\n",
 		},
+		{
+			name:   "an opening line comment survives beside an own-line one",
+			source: "var x = [  # c\n\t# d\n]\n",
+			want:   "var x = [  # c\n\t# d\n]\n",
+		},
+		{
+			name:   "an argument list holding only comments is still written",
+			source: "@e(\n\t# c\n)\nvar x := 1\n",
+			want:   "@e(\n\t\t# c\n)\nvar x := 1\n",
+		},
+		{
+			name:   "a signal parameter list holding only comments is still written",
+			source: "signal s(\n\t# c\n)\n",
+			want:   "signal s(\n\t\t# c\n)\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.Parse("comments.gd", []byte(test.source))

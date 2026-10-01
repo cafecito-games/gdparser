@@ -34,6 +34,13 @@ func TestCollectionCommentsSurviveFormatting(t *testing.T) {
 		{"enum after the last member", "enum E {\n\tA,\n\t# c\n}\n"},
 		{"enum end of line", "enum E {\n\tA,  # c\n\tB,\n}\n"},
 		{"nested collection", "var x = [\n\t[\n\t\t1,\n\t\t# c\n\t],\n]\n"},
+		{"opening line and own line", "var x = [  # c\n\t# d\n]\n"},
+		{"empty annotation argument list", "@e(\n\t# c\n)\nvar x := 1\n"},
+		{"empty signal parameter list", "signal s(\n\t# c\n)\n"},
+		{"empty parameter list", "func f(\n\t# c\n):\n\tpass\n"},
+		{"empty lambda parameter list", "var g := func(\n\t# c\n):\n\tpass\n"},
+		{"empty dictionary", "var d = {\n\t# c\n}\n"},
+		{"empty enum", "enum E {\n\t# c\n}\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.Parse("comments.gd", []byte(test.source))
@@ -41,8 +48,10 @@ func TestCollectionCommentsSurviveFormatting(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 			formatted := gdformat.File(file)
-			if !strings.Contains(formatted, "# c") {
-				t.Fatalf("formatted source dropped the comment:\n%s", formatted)
+			for _, comment := range commentsIn(test.source) {
+				if !strings.Contains(formatted, comment) {
+					t.Fatalf("formatted source dropped %q:\n%s", comment, formatted)
+				}
 			}
 			again, err := parser.Parse("comments.gd", []byte(formatted))
 			if err != nil {
@@ -101,4 +110,17 @@ func TestCollectionCommentsAreChildrenInSourceOrder(t *testing.T) {
 	if strings.Join(got, "|") != "# one|1|# two" {
 		t.Fatalf("children = %v, want [# one 1 # two]", got)
 	}
+}
+
+// commentsIn returns the comment text of every line in source that holds one.
+// The sources in this file hold no string literal containing a hash, so the
+// first hash on a line always opens its comment.
+func commentsIn(source string) []string {
+	var comments []string
+	for _, line := range strings.Split(source, "\n") {
+		if index := strings.IndexByte(line, '#'); index >= 0 {
+			comments = append(comments, strings.TrimRight(line[index:], " \t"))
+		}
+	}
+	return comments
 }
