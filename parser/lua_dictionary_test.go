@@ -61,6 +61,16 @@ func TestLuaStyleDictionary(t *testing.T) {
 			want:   "var d = {}\n",
 		},
 		{
+			name:   "several entries with mixed key kinds",
+			source: "var d = {x = 1, \"y\" = 2, z = 3}\n",
+			want:   "var d = { x = 1, \"y\" = 2, z = 3 }\n",
+		},
+		{
+			name:   "a dictionary pattern keeps its colons",
+			source: "func f(v):\n\tmatch v:\n\t\t{\"x\": var n}:\n\t\t\tpass\n",
+			want:   "func f(v):\n\tmatch v:\n\t\t{ \"x\": var n }:\n\t\t\tpass\n",
+		},
+		{
 			name:   "a comment inside a lua style literal",
 			source: "var d = {\n\tx = 1,\n\t# c\n\ty = 2,\n}\n",
 			want:   "var d = {\n\tx = 1,\n\t# c\n\ty = 2,\n}\n",
@@ -115,6 +125,22 @@ func TestLuaStyleDictionaryNode(t *testing.T) {
 	}
 }
 
+// A dictionary pattern is written with colons only, as Godot's pattern grammar
+// has no assignment in it.
+func TestLuaStyleDictionaryPatternIsRejected(t *testing.T) {
+	source := "func f(v):\n\tmatch v:\n\t\t{x = 1}:\n\t\t\tpass\n"
+	_, err := parser.Parse("lua.gd", []byte(source))
+	if err == nil {
+		t.Fatal("expected a parse error")
+	}
+	if !strings.Contains(err.Error(), "expected ':' after dictionary key") {
+		t.Fatalf("error does not name the rule: %v", err)
+	}
+	if !strings.Contains(err.Error(), "lua.gd:3:") {
+		t.Fatalf("error lacks a position: %v", err)
+	}
+}
+
 // Godot allows one style per literal, and names a Lua-style key with an
 // identifier or a string, so the parser holds to both rules.
 func TestLuaStyleDictionaryRejections(t *testing.T) {
@@ -127,6 +153,9 @@ func TestLuaStyleDictionaryRejections(t *testing.T) {
 		{"colon then lua", "var d = {\"y\": 2, x = 1}\n", "expected ':'"},
 		{"a number as a lua key", "var d = {1 = 2}\n", "identifier or a string"},
 		{"a call as a lua key", "var d = {f() = 2}\n", "identifier or a string"},
+		{"a bad key in a later entry", "var d = {x = 1, 2 = 2}\n", "identifier or a string"},
+		{"a member key in a later entry", "var d = {x = 1, y.z = 2}\n", "identifier or a string"},
+		{"a string name key in a later entry", "var d = {x = 1, &\"s\" = 2}\n", "identifier or a string"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := parser.Parse("lua.gd", []byte(test.source))
