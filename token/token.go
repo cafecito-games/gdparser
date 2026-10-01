@@ -58,6 +58,7 @@ const (
 	Star             Type = "*"
 	Slash            Type = "/"
 	DoubleStar       Type = "**"
+	DoubleStarAssign Type = "**="
 	Equal            Type = "=="
 	NotEqual         Type = "!="
 	Less             Type = "<"

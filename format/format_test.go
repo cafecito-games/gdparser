@@ -93,9 +93,10 @@ var styleCases = []struct {
 	},
 	{
 		name: "rewriting a bang keeps its meaning",
-		// not binds looser than !, so the parenthesis has to appear.
+		// Godot reads "!" and "not" through the same rule at the same level, so
+		// the one spelling becomes the other with nothing else to change.
 		source: "var a := !b == c\n",
-		want:   "var a := (not b) == c\n",
+		want:   "var a := not b == c\n",
 	},
 	{
 		name:   "unnecessary parentheses are dropped",
@@ -260,9 +261,11 @@ var styleCases = []struct {
 		want:   "var a := b if c else d\n",
 	},
 	{
-		name:   "power associates to the right",
-		source: "var a := 2 ** 3 ** 4\nvar b := (2 ** 3) ** 4\n",
-		want:   "var a := 2 ** 3 ** 4\nvar b := (2 ** 3) ** 4\n",
+		name: "power associates to the left",
+		// Godot reads every binary operator left-associatively, "**" included,
+		// so the grouping that spells out that order adds nothing.
+		source: "var a := 2 ** 3 ** 4\nvar b := (2 ** 3) ** 4\nvar c := 2 ** (3 ** 4)\n",
+		want:   "var a := 2 ** 3 ** 4\nvar b := 2 ** 3 ** 4\nvar c := 2 ** (3 ** 4)\n",
 	},
 }
 

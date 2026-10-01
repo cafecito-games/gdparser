@@ -489,6 +489,7 @@ func (l *lexer) scanOperator(start token.Position) error {
 		typ  token.Type
 	}{
 		{"<<=", token.ShiftLeftAssign}, {">>=", token.ShiftRightAssign},
+		{"**=", token.DoubleStarAssign},
 		{"&&", token.And}, {"||", token.Or},
 		{"...", token.Ellipsis}, {"..", token.Range},
 		{"**", token.DoubleStar}, {"->", token.Arrow}, {":=", token.InferAssign},

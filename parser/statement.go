@@ -20,7 +20,7 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 		p.takeCollectionComments(&comments, 0)
 		if !p.at(token.RParen) {
 			for {
-				argument, err := p.parseExpression(0)
+				argument, err := p.parseExpression(ast.PrecedenceAssignment)
 				if err != nil {
 					return nil, err
 				}
@@ -49,7 +49,7 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 
 func (p *parser) parseDirective() (ast.Statement, error) {
 	start := p.advance()
-	value, err := p.parseExpression(0)
+	value, err := p.parseExpression(ast.PrecedenceAssignment)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func (p *parser) parseDirective() (ast.Statement, error) {
 	var extendsSpan token.Span
 	if start.Type == token.ClassName && p.at(token.Extends) {
 		extendsSpan = p.advance().Span
-		extends, err = p.parseExpression(0)
+		extends, err = p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
@@ -125,11 +125,11 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 		operator := p.advance()
 		declaration.Inferred = true
 		declaration.OperatorSpan = operator.Span
-		declaration.Value, err = p.parseExpression(0)
+		declaration.Value, err = p.parseExpression(ast.PrecedenceAssignment)
 	} else if p.at(token.Assign) {
 		operator := p.advance()
 		declaration.OperatorSpan = operator.Span
-		declaration.Value, err = p.parseExpression(0)
+		declaration.Value, err = p.parseExpression(ast.PrecedenceAssignment)
 	}
 	if err != nil {
 		return nil, err
@@ -452,7 +452,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 					return nil, nil, p.error(operator, "a rest parameter cannot have a default value")
 				}
 				parameter.DefaultOperatorSpan = operator.Span
-				parameter.Default, err = p.parseExpression(0)
+				parameter.Default, err = p.parseExpression(ast.PrecedenceAssignment)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -557,7 +557,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 		if p.at(token.Assign) {
 			operator := p.advance()
 			member.OperatorSpan = operator.Span
-			member.Value, err = p.parseExpression(0)
+			member.Value, err = p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
@@ -584,7 +584,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 
 func (p *parser) parseIf() (ast.Statement, error) {
 	start := p.advance()
-	condition, err := p.parseExpression(0)
+	condition, err := p.parseExpression(ast.PrecedenceAssignment)
 	if err != nil {
 		return nil, err
 	}
@@ -602,7 +602,7 @@ func (p *parser) parseIf() (ast.Statement, error) {
 	for p.at(token.Elif) {
 		p.dropBlankLines()
 		keyword := p.advance()
-		condition, err = p.parseExpression(0)
+		condition, err = p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
@@ -632,7 +632,7 @@ func (p *parser) parseIf() (ast.Statement, error) {
 
 func (p *parser) parseWhile() (ast.Statement, error) {
 	start := p.advance()
-	condition, err := p.parseExpression(0)
+	condition, err := p.parseExpression(ast.PrecedenceAssignment)
 	if err != nil {
 		return nil, err
 	}
@@ -666,7 +666,7 @@ func (p *parser) parseFor() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	iterable, err := p.parseExpression(0)
+	iterable, err := p.parseExpression(ast.PrecedenceAssignment)
 	if err != nil {
 		return nil, err
 	}
@@ -683,7 +683,7 @@ func (p *parser) parseFor() (ast.Statement, error) {
 
 func (p *parser) parseMatch() (ast.Statement, error) {
 	start := p.advance()
-	value, err := p.parseExpression(0)
+	value, err := p.parseExpression(ast.PrecedenceAssignment)
 	if err != nil {
 		return nil, err
 	}
@@ -772,7 +772,7 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 		}
 		if p.at(token.When) {
 			matchCase.WhenSpan = p.advance().Span
-			matchCase.Guard, err = p.parseExpression(0)
+			matchCase.Guard, err = p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
@@ -824,7 +824,7 @@ func (p *parser) parseReturn() (ast.Statement, error) {
 	start := p.advance()
 	statement := &ast.ReturnStatement{Base: base(start.Span), KeywordSpan: start.Span}
 	if !p.at(token.Newline, token.Comment) {
-		value, err := p.parseExpression(0)
+		value, err := p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
@@ -835,13 +835,13 @@ func (p *parser) parseReturn() (ast.Statement, error) {
 }
 
 func (p *parser) parseExpressionStatement() (ast.Statement, error) {
-	expression, err := p.parseExpression(0)
+	expression, err := p.parseExpression(ast.PrecedenceAssignment)
 	if err != nil {
 		return nil, err
 	}
 	if isAssignment(p.peek().Type) {
 		operator := p.advance()
-		value, err := p.parseExpression(0)
+		value, err := p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
@@ -857,7 +857,7 @@ func isAssignment(typ token.Type) bool {
 	switch typ {
 	case token.Assign, token.PlusAssign, token.MinusAssign, token.StarAssign, token.SlashAssign,
 		token.PercentAssign, token.AmpAssign, token.PipeAssign, token.CaretAssign,
-		token.ShiftLeftAssign, token.ShiftRightAssign:
+		token.ShiftLeftAssign, token.ShiftRightAssign, token.DoubleStarAssign:
 		return true
 	default:
 		return false

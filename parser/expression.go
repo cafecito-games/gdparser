@@ -7,6 +7,10 @@ import (
 	"github.com/cafecito-games/gdparser/token"
 )
 
+// parseExpression reads an expression whose operators all bind at or above
+// minPrecedence, which is how Godot's parse_precedence reads one. The ternary
+// conditional is an infix operator of its own level there rather than a form
+// that only a whole expression may take.
 func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 	left, err := p.parsePrefix()
 	if err != nil {
@@ -20,38 +24,41 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 	for {
 		typ := p.peek().Type
 		operator := p.peek().Lexeme
-		precedence, rightAssociative := infixPrecedence(typ)
 		if typ == token.Not && p.peekN(1).Type == token.In {
-			operator, precedence = "not in", 3
+			operator = "not in"
 		}
 		if typ == token.Is && p.peekN(1).Type == token.Not {
-			operator, precedence = "is not", 3
+			operator = "is not"
 		}
-		if precedence < minPrecedence {
+		precedence := ast.OperatorPrecedence(operator)
+		if typ == token.If {
+			precedence = ast.PrecedenceTernary
+		}
+		if precedence == ast.PrecedenceNone || precedence < minPrecedence {
 			break
 		}
 		start := left.Span().Start
+		if typ == token.If {
+			left, err = p.parseTernary(left, start)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 		operatorStart := p.advance()
 		operatorEnd := operatorStart
 		if operator == "not in" || operator == "is not" {
 			operatorEnd = p.advance()
 		}
 		operatorSpan := token.Span{Start: operatorStart.Span.Start, End: operatorEnd.Span.End}
+		var right ast.Expression
 		if typ == token.As || typ == token.Is {
-			right, typeErr := p.parseTypeExpression()
-			if typeErr != nil {
-				return nil, typeErr
-			}
-			left = &ast.BinaryExpression{
-				Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, OperatorSpan: operatorSpan, Right: right,
-			}
-			continue
+			// A cast and a type test read a type rather than an expression, so
+			// the level they bind at decides only where they attach.
+			right, err = p.parseTypeExpression()
+		} else {
+			right, err = p.parseExpression(precedence + 1)
 		}
-		nextMin := precedence + 1
-		if rightAssociative {
-			nextMin = precedence
-		}
-		right, err := p.parseExpression(nextMin)
 		if err != nil {
 			return nil, err
 		}
@@ -59,28 +66,31 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 			Base: spanFrom(start, right.Span().End), Left: left, Operator: operator, OperatorSpan: operatorSpan, Right: right,
 		}
 	}
-
-	if minPrecedence == 0 && p.at(token.If) {
-		start := left.Span().Start
-		ifToken := p.advance()
-		condition, err := p.parseExpression(0)
-		if err != nil {
-			return nil, err
-		}
-		elseToken, err := p.expect(token.Else, "expected else in ternary expression")
-		if err != nil {
-			return nil, err
-		}
-		alternative, err := p.parseExpression(0)
-		if err != nil {
-			return nil, err
-		}
-		left = &ast.TernaryExpression{
-			Base: spanFrom(start, alternative.Span().End), Value: left, IfSpan: ifToken.Span,
-			Condition: condition, ElseSpan: elseToken.Span, Alternative: alternative,
-		}
-	}
 	return left, nil
+}
+
+// parseTernary reads the rest of "value if condition else alternative", whose
+// "if" the caller has found but not consumed. Godot reads both the condition and
+// the alternative at the conditional's own level, which lets the alternative
+// hold another conditional without parentheses.
+func (p *parser) parseTernary(value ast.Expression, start token.Position) (ast.Expression, error) {
+	ifToken := p.advance()
+	condition, err := p.parseExpression(ast.PrecedenceTernary)
+	if err != nil {
+		return nil, err
+	}
+	elseToken, err := p.expect(token.Else, "expected else in ternary expression")
+	if err != nil {
+		return nil, err
+	}
+	alternative, err := p.parseExpression(ast.PrecedenceTernary)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.TernaryExpression{
+		Base: spanFrom(start, alternative.Span().End), Value: value, IfSpan: ifToken.Span,
+		Condition: condition, ElseSpan: elseToken.Span, Alternative: alternative,
+	}, nil
 }
 
 func (p *parser) parsePrefix() (ast.Expression, error) {
@@ -111,11 +121,7 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 	case token.Null:
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.NullLiteral, Raw: tok.Lexeme}, nil
 	case token.Minus, token.Plus, token.Not, token.Bang, token.Tilde, token.Await:
-		operandPrecedence := 11
-		if tok.Type == token.Not {
-			operandPrecedence = 3
-		}
-		operand, err := p.parseExpression(operandPrecedence)
+		operand, err := p.parseExpression(ast.UnaryOperandPrecedence(tok.Lexeme))
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +129,7 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 			Base: spanFrom(tok.Span.Start, operand.Span().End), Operator: tok.Lexeme, OperatorSpan: tok.Span, Operand: operand,
 		}, nil
 	case token.LParen:
-		expr, err := p.parseExpression(0)
+		expr, err := p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err
 		}
@@ -151,9 +157,12 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 	case token.Preload:
 		return p.parsePreload(tok)
 	default:
-		// A keyword that may be a declared name, such as "match", is still not
-		// an expression of its own, so no name is read here beyond an
-		// identifier.
+		// Godot rewrites a keyword that may stand for an identifier into one
+		// before it looks for a prefix rule, so "match" and "when" name a value
+		// here as well as a declaration.
+		if token.IsIdentifier(tok.Type) {
+			return &ast.Identifier{Base: base(tok.Span), Name: tok.Lexeme}, nil
+		}
 		return nil, p.error(tok, "expected expression")
 	}
 }
@@ -223,7 +232,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 				Property: property.Lexeme, PropertySpan: property.Span,
 			}
 		case p.match(token.LBracket):
-			index, err := p.parseExpression(0)
+			index, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
@@ -246,7 +255,7 @@ func (p *parser) parseArguments() ([]ast.Expression, []ast.CollectionComment, to
 	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RParen) {
 		for {
-			argument, err := p.parseExpression(0)
+			argument, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, nil, token.Token{}, err
 			}
@@ -346,7 +355,7 @@ func (p *parser) parseTypeExpression() (ast.Expression, error) {
 }
 
 func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
-	return p.parseArrayOf(start, func() (ast.Expression, error) { return p.parseExpression(0) })
+	return p.parseArrayOf(start, func() (ast.Expression, error) { return p.parseExpression(ast.PrecedenceAssignment) })
 }
 
 // parseArrayOf parses a bracketed element list, reading each element with
@@ -383,7 +392,7 @@ func (p *parser) parseArrayOf(start token.Token, parseElement func() (ast.Expres
 }
 
 func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
-	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(0) }, true)
+	return p.parseDictionaryOf(start, func() (ast.Expression, error) { return p.parseExpression(ast.PrecedenceAssignment) }, true)
 }
 
 // parseDictionaryOf parses a braced entry list, reading each value with
@@ -397,7 +406,7 @@ func (p *parser) parseDictionaryOf(start token.Token, parseValue func() (ast.Exp
 	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RBrace) {
 		for {
-			key, err := p.parseExpression(0)
+			key, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}
@@ -507,33 +516,6 @@ func (p *parser) parseNodePath(start token.Token) (ast.Expression, error) {
 	}
 }
 
-func infixPrecedence(typ token.Type) (int, bool) {
-	switch typ {
-	case token.Or:
-		return 1, false
-	case token.And:
-		return 2, false
-	case token.Equal, token.NotEqual, token.Less, token.LessEqual, token.Greater, token.GreaterEqual, token.In, token.Is, token.As:
-		return 3, false
-	case token.Pipe:
-		return 4, false
-	case token.Caret:
-		return 5, false
-	case token.Ampersand:
-		return 6, false
-	case token.ShiftLeft, token.ShiftRight:
-		return 7, false
-	case token.Plus, token.Minus:
-		return 8, false
-	case token.Star, token.Slash, token.Percent:
-		return 9, false
-	case token.DoubleStar:
-		return 10, true
-	default:
-		return -1, false
-	}
-}
-
 // stringLiteral builds a string, string name, or node path literal, recording
 // the quote character and the triple-quoted and raw-prefixed forms so that the
 // formatter can requote it without re-lexing its escapes.
@@ -578,7 +560,7 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 	case p.at(token.LBrace):
 		return p.parseDictionaryPattern(p.advance())
 	}
-	return p.parseExpression(0)
+	return p.parseExpression(ast.PrecedenceAssignment)
 }
 
 // parseDictionaryPattern parses a braced dictionary pattern, whose "{" has been
@@ -624,7 +606,7 @@ func (p *parser) parseDictionaryPattern(start token.Token) (ast.Expression, erro
 			entries = append(entries, ast.DictionaryEntry{Key: &ast.RestPattern{Base: base(keyword.Span)}})
 			rest = true
 		} else {
-			key, err := p.parseExpression(0)
+			key, err := p.parseExpression(ast.PrecedenceAssignment)
 			if err != nil {
 				return nil, err
 			}

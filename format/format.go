@@ -695,7 +695,7 @@ func (p *printer) logicalChain(binary *ast.BinaryExpression, parenthesize bool) 
 // by breakable operator keywords.
 func (p *printer) logicalParts(binary *ast.BinaryExpression) []doc {
 	operator := p.operatorText(binary.Operator)
-	precedence := operatorPrecedence(operator)
+	precedence := ast.OperatorPrecedence(operator)
 	var parts []doc
 	if left, ok := binary.Left.(*ast.BinaryExpression); ok && p.operatorText(left.Operator) == operator {
 		parts = p.logicalParts(left)
@@ -724,29 +724,25 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return text(prefix + node.Path)
 	case *ast.UnaryExpression:
 		operator := p.operatorText(node.Operator)
-		operandPrecedence := 11
-		if operator == "not" {
-			operandPrecedence = 3
-		}
+		// A prefix operator reads its operand at one level, which is also the
+		// level the whole unary expression binds at, so the same number decides
+		// both whether the operand needs parentheses and whether this does.
+		precedence := ast.UnaryOperandPrecedence(operator)
 		spelled := operator
 		if operator == "not" || operator == "await" {
 			spelled += " "
 		}
-		inner := concat(text(spelled), p.expression(node.Operand, operandPrecedence))
-		if operator == "not" && parentPrecedence >= 3 {
-			return parenthesized(inner)
-		}
-		if 11 < parentPrecedence {
+		inner := concat(text(spelled), p.expression(node.Operand, precedence))
+		if precedence < parentPrecedence {
 			return parenthesized(inner)
 		}
 		return inner
 	case *ast.BinaryExpression:
 		operator := p.operatorText(node.Operator)
-		precedence := operatorPrecedence(operator)
+		precedence := ast.OperatorPrecedence(operator)
+		// Every binary operator in GDScript is left-associative, so only the
+		// operand on the right has to bind tighter than the operator.
 		leftPrecedence, rightPrecedence := precedence, precedence+1
-		if operator == "**" {
-			leftPrecedence, rightPrecedence = precedence+1, precedence
-		}
 		if isLogicalOperator(operator) {
 			return p.logicalChain(node, precedence < parentPrecedence)
 		}
@@ -761,24 +757,24 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return inner
 	case *ast.TernaryExpression:
 		inner := concat(
-			p.expression(node.Value, 1), text(" if "),
-			p.expression(node.Condition, 1), text(" else "),
-			p.expression(node.Alternative, 1),
+			p.expression(node.Value, ast.PrecedenceTernary+1), text(" if "),
+			p.expression(node.Condition, ast.PrecedenceTernary), text(" else "),
+			p.expression(node.Alternative, ast.PrecedenceTernary),
 		)
-		if parentPrecedence > 0 {
+		if ast.PrecedenceTernary < parentPrecedence {
 			return parenthesized(inner)
 		}
 		return inner
 	case *ast.CallExpression:
 		return concat(
-			p.expression(node.Callee, 12),
+			p.expression(node.Callee, ast.PrecedenceCall),
 			p.collection(argumentLayout, p.arguments(node.Arguments), node.Comments),
 		)
 	case *ast.MemberExpression:
-		return closeAfter(p.expression(node.Object, 12), "."+node.Property)
+		return closeAfter(p.expression(node.Object, ast.PrecedenceAttribute), "."+node.Property)
 	case *ast.SubscriptExpression:
 		return concat(
-			p.expression(node.Object, 12),
+			p.expression(node.Object, ast.PrecedenceSubscript),
 			text("["),
 			closeAfter(p.expression(node.Index, 0), "]"),
 		)
@@ -1082,31 +1078,4 @@ func (p *printer) commentText(comment *ast.Comment) string {
 		return raw
 	}
 	return marker + " " + body
-}
-
-func operatorPrecedence(operator string) int {
-	switch operator {
-	case "or", "||":
-		return 1
-	case "and", "&&":
-		return 2
-	case "==", "!=", "<", "<=", ">", ">=", "in", "not in", "is", "is not", "as":
-		return 3
-	case "|":
-		return 4
-	case "^":
-		return 5
-	case "&":
-		return 6
-	case "<<", ">>":
-		return 7
-	case "+", "-":
-		return 8
-	case "*", "/", "%":
-		return 9
-	case "**":
-		return 10
-	default:
-		return 0
-	}
 }
