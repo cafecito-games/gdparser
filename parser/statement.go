@@ -511,6 +511,7 @@ func (p *parser) parseIf() (ast.Statement, error) {
 	}
 	p.match(token.Newline)
 	for p.at(token.Elif) {
+		p.dropBlankLines()
 		keyword := p.advance()
 		condition, err = p.parseExpression(0)
 		if err != nil {
@@ -527,6 +528,7 @@ func (p *parser) parseIf() (ast.Statement, error) {
 		p.match(token.Newline)
 	}
 	if p.at(token.Else) {
+		p.dropBlankLines()
 		keyword := p.advance()
 		statement.Else, end, err = p.parseSuite()
 		if err != nil {

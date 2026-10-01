@@ -55,6 +55,12 @@ type parser struct {
 	blankLines int
 }
 
+// dropBlankLines discards the blank lines left over by a nested block. A
+// keyword that continues a compound statement, such as elif or else, stands on
+// a line of its own that belongs to no block, so blank lines before it precede
+// that line rather than the first statement of the block it opens.
+func (p *parser) dropBlankLines() { p.blankLines = 0 }
+
 // takeBlankLines returns and clears the blank lines left over by a nested block.
 func (p *parser) takeBlankLines() int {
 	count := p.blankLines
