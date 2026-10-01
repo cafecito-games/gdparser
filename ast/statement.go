@@ -82,6 +82,10 @@ func (*ReturnStatement) statement() {}
 // Branch is one if/elif condition and body.
 type Branch struct {
 	Base
+	// Comments holds the comments written on their own lines above the branch's
+	// keyword. They belong to no body, since the keyword's line belongs to the
+	// statement rather than to either block it separates.
+	Comments    []*Comment  `json:"comments,omitempty"`
 	KeywordSpan token.Span  `json:"keyword_span,omitempty"`
 	Condition   Expression  `json:"condition"`
 	Body        []Statement `json:"body"`
@@ -91,10 +95,12 @@ type Branch struct {
 type IfStatement struct {
 	Base
 	Trivia
-	Branches        []Branch    `json:"branches"`
-	Else            []Statement `json:"else,omitempty"`
-	ElseSpan        token.Span  `json:"else_span,omitempty"`
-	ElseKeywordSpan token.Span  `json:"else_keyword_span,omitempty"`
+	Branches []Branch    `json:"branches"`
+	Else     []Statement `json:"else,omitempty"`
+	// ElseComments holds the comments written on their own lines above "else".
+	ElseComments    []*Comment `json:"else_comments,omitempty"`
+	ElseSpan        token.Span `json:"else_span,omitempty"`
+	ElseKeywordSpan token.Span `json:"else_keyword_span,omitempty"`
 }
 
 func (*IfStatement) node()      {}

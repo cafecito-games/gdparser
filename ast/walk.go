@@ -159,8 +159,14 @@ func Children(node Node) []Node {
 		addExpr(n.Value)
 	case *IfStatement:
 		for _, branch := range n.Branches {
+			for _, comment := range branch.Comments {
+				out = append(out, comment)
+			}
 			addExpr(branch.Condition)
 			addStmts(branch.Body)
+		}
+		for _, comment := range n.ElseComments {
+			out = append(out, comment)
 		}
 		addStmts(n.Else)
 	case *WhileStatement:

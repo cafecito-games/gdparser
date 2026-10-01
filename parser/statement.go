@@ -648,7 +648,14 @@ func (p *parser) parseIf() (ast.Statement, error) {
 		}},
 	}
 	p.match(token.Newline)
-	for p.at(token.Elif) {
+	for {
+		// A comment may sit between a branch's body and the keyword that
+		// continues the statement. It belongs to the branch it introduces, since
+		// the keyword's line is part of neither block.
+		comments := p.takeContinuationKeywordComments(token.Elif)
+		if !p.at(token.Elif) {
+			break
+		}
 		p.dropBlankLines()
 		keyword := p.advance()
 		condition, err = p.parseExpression(ast.PrecedenceAssignment)
@@ -660,14 +667,17 @@ func (p *parser) parseIf() (ast.Statement, error) {
 			return nil, err
 		}
 		statement.Branches = append(statement.Branches, ast.Branch{
-			Base: spanFrom(keyword.Span.Start, componentEnd(body, end)), KeywordSpan: keyword.Span, Condition: condition, Body: body,
+			Base: spanFrom(keyword.Span.Start, componentEnd(body, end)), KeywordSpan: keyword.Span,
+			Comments: comments, Condition: condition, Body: body,
 		})
 		statement.SourceSpan.End = end
 		p.match(token.Newline)
 	}
+	elseComments := p.takeContinuationKeywordComments(token.Else)
 	if p.at(token.Else) {
 		p.dropBlankLines()
 		keyword := p.advance()
+		statement.ElseComments = elseComments
 		statement.Else, end, err = p.parseSuite()
 		if err != nil {
 			return nil, err
@@ -677,6 +687,33 @@ func (p *parser) parseIf() (ast.Statement, error) {
 		statement.SourceSpan.End = end
 	}
 	return statement, nil
+}
+
+// takeContinuationKeywordComments reads the comments that sit between a branch's
+// body and the keyword that continues the statement, and only when that keyword
+// does follow them. Nothing is read otherwise, so a comment introducing the next
+// statement is left where it stands.
+func (p *parser) takeContinuationKeywordComments(keyword token.Type) []*ast.Comment {
+	if !p.at(token.Comment) {
+		return nil
+	}
+	offset := 0
+	for {
+		switch p.peekN(offset).Type {
+		case token.Comment, token.Newline:
+			offset++
+			continue
+		case keyword:
+			var comments []*ast.Comment
+			for range offset {
+				if tok := p.advance(); tok.Type == token.Comment {
+					comments = append(comments, commentNode(tok))
+				}
+			}
+			return comments
+		}
+		return nil
+	}
 }
 
 func (p *parser) parseWhile() (ast.Statement, error) {
@@ -993,14 +1030,18 @@ func (p *parser) parseType(allowVoid bool, comments *[]ast.CollectionComment, in
 	}
 	// A dotted name reaches an inner class or an enum of the outer one. Brackets
 	// and a dotted name are alternatives, as they are for Godot.
-	for p.at(token.Dot) {
+	for {
+		// A comment may break the name on either side of a dot. It ends the type
+		// only when no dot follows it, because then the name is complete.
+		if p.at(token.Comment) && p.peekPastComments().Type == token.Dot {
+			p.takeTypeComments(comments, index)
+		}
+		if !p.at(token.Dot) {
+			break
+		}
 		dot := p.advance()
 		write(dot, ".")
-		if comments != nil {
-			// The name goes on after the comment, so the comment interrupts the
-			// type rather than ending it.
-			p.takeCollectionComments(comments, index)
-		}
+		p.takeTypeComments(comments, index)
 		part, err := p.expectIdentifier("expected a type name after '.'")
 		if err != nil {
 			return "", token.Span{}, err
@@ -1008,6 +1049,18 @@ func (p *parser) parseType(allowVoid bool, comments *[]ast.CollectionComment, in
 		write(part, part.Lexeme)
 	}
 	return out.String(), span, nil
+}
+
+// takeTypeComments collects a comment run that interrupts a type. A parameter
+// list can anchor it to the parameter it interrupts, which keeps it on that
+// parameter's line; anywhere else nothing in the type can hold it, so it waits
+// for the statement to end.
+func (p *parser) takeTypeComments(comments *[]ast.CollectionComment, index int) {
+	if comments != nil {
+		p.takeCollectionComments(comments, index)
+		return
+	}
+	p.takeStrayComments()
 }
 
 // parseTypeList reads the comma-separated types inside a type's brackets,

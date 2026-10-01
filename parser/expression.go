@@ -22,6 +22,17 @@ func (p *parser) parseExpression(minPrecedence int) (ast.Expression, error) {
 	}
 
 	for {
+		if p.at(token.Comment) {
+			// A comment may stand between an operand and the operator that
+			// follows it. Only an operator that this call would read justifies
+			// stepping over it: anything else leaves the comment where it is, for
+			// the construct around the expression to collect.
+			if ast.OperatorPrecedence(p.peekPastComments().Lexeme) < minPrecedence &&
+				p.peekPastComments().Type != token.If {
+				break
+			}
+			p.takeStrayComments()
+		}
 		typ := p.peek().Type
 		operator := p.peek().Lexeme
 		if typ == token.Not && p.peekN(1).Type == token.In {
@@ -86,6 +97,7 @@ func (p *parser) parseTernary(value ast.Expression, start token.Position) (ast.E
 	if err != nil {
 		return nil, err
 	}
+	p.takeStrayComments()
 	elseToken, err := p.expect(token.Else, "expected else in ternary expression")
 	if err != nil {
 		return nil, err
@@ -101,6 +113,10 @@ func (p *parser) parseTernary(value ast.Expression, start token.Position) (ast.E
 }
 
 func (p *parser) parsePrefix() (ast.Expression, error) {
+	// An operand may be pushed onto the next line by a comment wherever brackets
+	// keep the expression open. The comment belongs to no part of the expression,
+	// so it is held for the end of the statement.
+	p.takeStrayComments()
 	tok := p.advance()
 	switch tok.Type {
 	case token.Identifier:

@@ -203,6 +203,11 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 				parts = append(parts, hardLine)
 				keyword = "elif "
 			}
+			// A comment above the keyword introduces the branch, so it stands on
+			// its own line at the keyword's indentation.
+			for _, comment := range branch.Comments {
+				parts = append(parts, text(p.commentText(comment)), hardLine)
+			}
 			parts = append(parts,
 				text(keyword),
 				closeAfter(p.headerExpression(branch.Condition), ":"),
@@ -210,7 +215,11 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 			)
 		}
 		if node.Else != nil {
-			parts = append(parts, hardLine, text("else:"), p.suite(node.Else))
+			parts = append(parts, hardLine)
+			for _, comment := range node.ElseComments {
+				parts = append(parts, text(p.commentText(comment)), hardLine)
+			}
+			parts = append(parts, text("else:"), p.suite(node.Else))
 		}
 		return concat(parts...)
 	case *ast.WhileStatement:

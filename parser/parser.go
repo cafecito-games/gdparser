@@ -61,6 +61,12 @@ type parser struct {
 	// meaning in the construct being parsed. Godot keeps the same stack, and the
 	// tokenizer follows its top.
 	multilineStack []bool
+	// strayComments holds the comments found where the expression grammar has no
+	// place for them, such as between an operator and its operand. Brackets let a
+	// comment break a line almost anywhere, and Godot discards every one of them,
+	// which a formatter may not do, so they are held until the statement ends and
+	// stand on their own lines after it, in the scope they were written in.
+	strayComments []*ast.Comment
 	// functionName is the name of the function whose body is being read, or empty
 	// outside one and inside a lambda. Godot reads it to hold a constructor to its
 	// own rules.
@@ -281,6 +287,10 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 		// sit inside the statement. The first comment on the statement's own line
 		// trails it; the rest keep the scope they were written in by standing as
 		// comments of their own after it.
+		for _, comment := range p.strayComments {
+			statements = append(statements, comment)
+		}
+		p.strayComments = nil
 		trailing := p.endsLineOf(stmt)
 		for p.at(token.Comment) {
 			comment := commentNode(p.advance())
@@ -445,6 +455,14 @@ func (p *parser) parseClassSuite() ([]ast.Statement, token.Position, error) {
 // which ends at the first thing that could not continue it rather than only at a
 // dedent, because the expression the lambda sits in picks up from there.
 func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, token.Position, error) {
+	// Comments found inside the header, where the grammar had no place for them,
+	// belong to the header's line rather than to the block's first statement, so
+	// they come before the ones written after the colon.
+	var headerComments []ast.Statement
+	for _, comment := range p.strayComments {
+		headerComments = append(headerComments, comment)
+	}
+	p.strayComments = nil
 	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
 		return nil, token.Position{}, err
 	}
@@ -452,7 +470,6 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 	// from the header's continuation lines, which have nowhere to sit inside the
 	// header. All of them open the block, which is the nearest scope the
 	// statement owns.
-	var headerComments []ast.Statement
 	for p.at(token.Comment) {
 		headerComments = append(headerComments, commentNode(p.advance()))
 	}
@@ -712,6 +729,14 @@ func (p *parser) endsLineOf(statement ast.Statement) bool {
 // so cannot have a comment trailing it on the same line.
 func endsLine(typ token.Type) bool {
 	return typ == token.Newline || typ == token.Indent || typ == token.Dedent
+}
+
+// takeStrayComments collects the comment run at the current position as comments
+// the expression grammar cannot place. Nothing is read unless a comment is there.
+func (p *parser) takeStrayComments() {
+	for p.at(token.Comment) {
+		p.strayComments = append(p.strayComments, commentNode(p.advance()))
+	}
 }
 
 // peekPastComments returns the first token that is not part of the comment run
