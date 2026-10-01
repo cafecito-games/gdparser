@@ -1,8 +1,10 @@
 package format_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/cafecito-games/gdparser/ast"
 	"github.com/cafecito-games/gdparser/format"
 	"github.com/cafecito-games/gdparser/parser"
 )
@@ -84,5 +86,47 @@ func TestBlockLambdaEndingANestedCollectionKeepsItsComma(t *testing.T) {
 				t.Fatalf("not idempotent:\n--- first ---\n%s--- second ---\n%s", got, again)
 			}
 		})
+	}
+}
+
+// A subscript and a property's accessor colon follow an expression with no
+// comma between, so a block lambda written there is parenthesized to end its
+// body before they are read.
+func TestBlockLambdaBeforeAClosingTokenIsParenthesized(t *testing.T) {
+	for _, source := range []string{
+		"func f():\n\tg(a[func():\n\t\tpass  # c\n\t])\n",
+		"func f():\n\tg(a[func():\n\t\tpass\n\t])\n",
+		"func f():\n\tvar x = a[func():\n\t\tpass\n\t]\n",
+		"func f():\n\tvar x = [a[func():\n\t\tpass  # c\n\t], 1]\n",
+		"var d = func():\n\tpass\n:\n\tget = _get_d\n",
+		"var d = func():\n\tpass\n:\n\tget:\n\t\treturn 1\n",
+	} {
+		for _, commas := range []format.TrailingCommaStyle{format.TrailingCommasWhenBroken, format.NoTrailingCommas} {
+			file, err := parser.Parse("closing.gd", []byte(source))
+			if err != nil {
+				t.Fatalf("parse %q: %v", source, err)
+			}
+			options := format.GodotStyle()
+			options.TrailingCommas = commas
+			got := format.FileWithOptions(file, options)
+			reparsed, err := parser.Parse("closing.gd", []byte(got))
+			if err != nil {
+				t.Errorf("reparse of %q: %v\n%s", source, err, got)
+				continue
+			}
+			if again := format.FileWithOptions(reparsed, options); again != got {
+				t.Errorf("not idempotent:\n--- first ---\n%s--- second ---\n%s", got, again)
+			}
+			var before, after strings.Builder
+			if err := ast.Dump(&before, file); err != nil {
+				t.Fatal(err)
+			}
+			if err := ast.Dump(&after, reparsed); err != nil {
+				t.Fatal(err)
+			}
+			if before.String() != after.String() {
+				t.Errorf("the tree changed:\n--- source ---\n%s--- formatted ---\n%s\n%s", before.String(), after.String(), got)
+			}
+		}
 	}
 }

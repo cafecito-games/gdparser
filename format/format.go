@@ -328,8 +328,9 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 		return header
 	}
 	// The accessor block's colon follows the initializer, so an initializer
-	// ending in a comment is parenthesized to give the colon its own line.
-	if endsWithLineComment(header) && node.Value != nil {
+	// ending in a comment is parenthesized to give the colon its own line, and
+	// one ending in a block lambda's body to keep the colon out of that body.
+	if node.Value != nil && (endsWithLineComment(header) || endsInsideBlock(node.Value)) {
 		parts[len(parts)-1] = parenthesized(p.expression(node.Value, 0))
 		header = concat(parts...)
 	}
@@ -910,10 +911,17 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 	case *ast.MemberExpression:
 		return closeAfter(p.expression(node.Object, ast.PrecedenceAttribute), "."+node.Property)
 	case *ast.SubscriptExpression:
+		// A subscript has no comma to end the body of a block lambda written as
+		// its index, so such a lambda is parenthesized, and the parenthesis ends
+		// the body before the bracket has to.
+		indexPrecedence := 0
+		if endsInsideBlock(node.Index) {
+			indexPrecedence = ast.PrecedenceSubscript
+		}
 		return concat(
 			p.expression(node.Object, ast.PrecedenceSubscript),
 			text("["),
-			closeAfter(p.expression(node.Index, 0), "]"),
+			closeAfter(p.expression(node.Index, indexPrecedence), "]"),
 		)
 	case *ast.ArrayLiteral:
 		return p.collection(arrayLayout, p.arguments(node.Elements), node.Comments)
