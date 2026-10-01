@@ -83,6 +83,29 @@ func join(separator doc, parts []doc) doc {
 	return concat(joined...)
 }
 
+// endsWithLineComment reports whether the last thing a document emits is a
+// comment. A comment runs to the end of its line, so anything concatenated
+// after one is swallowed into its text instead of being emitted as code.
+func endsWithLineComment(d doc) bool {
+	switch node := d.(type) {
+	case docText:
+		return strings.HasPrefix(node.text, "#")
+	case docConcat:
+		if len(node.parts) == 0 {
+			return false
+		}
+		return endsWithLineComment(node.parts[len(node.parts)-1])
+	case docGroup:
+		return endsWithLineComment(node.inner)
+	case docNest:
+		return endsWithLineComment(node.inner)
+	case docIfBreak:
+		return endsWithLineComment(node.broken) || endsWithLineComment(node.flat)
+	default:
+		return false
+	}
+}
+
 func group(inner doc) doc { return docGroup{inner: inner} }
 
 func nest(levels int, inner doc) doc { return docNest{levels: levels, inner: inner} }

@@ -143,6 +143,14 @@ measured:
 		return nil
 	}
 	l.atStart = false
+	if l.layoutDepth > 0 && l.depth == l.layoutDepth && closesLambdaLayout(l.peek()) {
+		// A comma or closing bracket on its own line ends the lambda body
+		// rather than continuing it, so endLambdaLayout unwinds the
+		// indentation stack when the token itself is scanned. Measuring this
+		// line here would instead reject an indentation that is allowed to sit
+		// outside the body's block.
+		return nil
+	}
 	top := l.indents[len(l.indents)-1]
 	p := token.Position{Offset: startOffset, Line: l.line, Column: 1}
 	if columns > top && l.peek() == '#' {
@@ -167,6 +175,12 @@ measured:
 		}
 	}
 	return nil
+}
+
+// closesLambdaLayout reports whether c, as the first character of a line,
+// terminates an enclosing multiline lambda body.
+func closesLambdaLayout(c byte) bool {
+	return c == ',' || c == ')' || c == ']' || c == '}'
 }
 
 func (l *lexer) scanComment(start token.Position) {

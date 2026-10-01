@@ -342,7 +342,28 @@ func (p *printer) collection(shape layout, items []doc) doc {
 	}
 	var tail doc
 	if shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken {
-		tail = ifBroken(text(","), text(""))
+		// An optional comma is dropped after an item that ends in a comment,
+		// which would otherwise swallow it, rather than stranded on a line of
+		// its own for the sake of a style preference.
+		if !endsWithLineComment(items[len(items)-1]) {
+			tail = ifBroken(text(","), text(""))
+		}
+	}
+	separated := make([]doc, 0, len(items)*3)
+	for index, item := range items {
+		if index > 0 {
+			separated = append(separated, spaceLine)
+		}
+		separated = append(separated, item)
+		if index == len(items)-1 {
+			continue
+		}
+		// A separating comma is required, so an item ending in a comment moves
+		// it onto the next line instead of losing it.
+		if endsWithLineComment(item) {
+			separated = append(separated, hardLine)
+		}
+		separated = append(separated, text(","))
 	}
 	pad := doc(text(""))
 	if shape.padFlat {
@@ -351,7 +372,7 @@ func (p *printer) collection(shape layout, items []doc) doc {
 	return group(concat(
 		text(shape.open),
 		pad,
-		nest(shape.levels, concat(softLine, join(concat(text(","), spaceLine), items), tail)),
+		nest(shape.levels, concat(softLine, concat(separated...), tail)),
 		softLine,
 		pad,
 		text(shape.close),

@@ -166,3 +166,23 @@ func TestLexCommentAtColumnZeroStillDedents(t *testing.T) {
 		}
 	}
 }
+
+func TestLexOwnLineCommaEndsALambdaBody(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var x = [\n\tfunc():\n\t\tpass\n\t,\n\t2,\n]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	var dedents int
+	for _, kind := range kinds {
+		if kind == token.Dedent {
+			dedents++
+		}
+	}
+	if dedents != 1 {
+		t.Fatalf("got %d DEDENT tokens, want 1: %v", dedents, kinds)
+	}
+}

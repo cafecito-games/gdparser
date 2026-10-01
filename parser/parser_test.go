@@ -203,8 +203,12 @@ func TestCommentIndentedDeeperThanItsBlock(t *testing.T) {
 			if !strings.Contains(formatted, "# c") {
 				t.Errorf("formatted source dropped the comment:\n%s", formatted)
 			}
-			if _, err := parser.Parse("deeper.gd", []byte(formatted)); err != nil {
+			again, err := parser.Parse("deeper.gd", []byte(formatted))
+			if err != nil {
 				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+			if reformatted := gdformat.File(again); reformatted != formatted {
+				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
 			}
 		})
 	}
