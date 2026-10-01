@@ -144,7 +144,7 @@ type command struct {
 
 // render lays out document within the option's column budget.
 func render(document doc, options Options) string {
-	var builder strings.Builder
+	var output []byte
 	column := 0
 	stack := []command{{mode: modeBreak, doc: document}}
 	for len(stack) > 0 {
@@ -152,7 +152,7 @@ func render(document doc, options Options) string {
 		stack = stack[:len(stack)-1]
 		switch node := current.doc.(type) {
 		case docText:
-			builder.WriteString(node.text)
+			output = append(output, node.text...)
 			if index := strings.LastIndexByte(node.text, '\n'); index >= 0 {
 				column = textWidth(node.text[index+1:], options)
 			} else {
@@ -180,17 +180,17 @@ func render(document doc, options Options) string {
 		case docLine:
 			if current.mode == modeFlat && node.kind != lineHard {
 				if node.kind == lineSpace {
-					builder.WriteByte(' ')
+					output = append(output, ' ')
 					column++
 				}
 				continue
 			}
-			builder.WriteByte('\n')
-			builder.WriteString(strings.Repeat(options.indentUnit(), current.indent))
+			output = append(trimTrailingSpace(output), '\n')
+			output = append(output, strings.Repeat(options.indentUnit(), current.indent)...)
 			column = current.indent * options.indentColumns()
 		}
 	}
-	return trimTrailingSpace(builder.String())
+	return string(trimTrailingSpace(output))
 }
 
 // fits reports whether next, followed by the already-queued rest, reaches a
@@ -269,12 +269,14 @@ func textWidth(value string, options Options) int {
 	return width
 }
 
-// trimTrailingSpace removes trailing tabs and spaces from every line, so that
-// an indented blank line does not carry whitespace.
-func trimTrailingSpace(value string) string {
-	lines := strings.Split(value, "\n")
-	for index, line := range lines {
-		lines[index] = strings.TrimRight(line, " \t")
+// trimTrailingSpace removes the tabs and spaces that end output, which is done
+// wherever the renderer ends a line, so that an indented blank line carries no
+// whitespace. A line break inside a literal is not the renderer's, so whitespace
+// before one is part of the literal's value and is never looked at.
+func trimTrailingSpace(output []byte) []byte {
+	end := len(output)
+	for end > 0 && (output[end-1] == ' ' || output[end-1] == '\t') {
+		end--
 	}
-	return strings.Join(lines, "\n")
+	return output[:end]
 }
