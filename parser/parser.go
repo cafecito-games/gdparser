@@ -388,16 +388,44 @@ func statementHasBlockLambda(statement ast.Statement) bool {
 	return found
 }
 
-func isNameToken(tok token.Token) bool {
-	if tok.Lexeme == "" {
+// nameKind says which keywords Godot still accepts where a name is expected.
+// The set differs by position, so each name position names its own kind.
+type nameKind int
+
+const (
+	// declaredName is a name Godot declares or binds: a variable, a function,
+	// a parameter, a class, a signal, an enum or its member, a loop variable,
+	// a lambda, or a type. Only the contextual keywords may be used there.
+	declaredName nameKind = iota
+	// memberName follows a dot in an expression, where Godot accepts every
+	// keyword that is not a literal.
+	memberName
+	// annotationName follows '@', where Godot reads the name as text and so
+	// accepts every keyword.
+	annotationName
+)
+
+// isNameToken reports whether tok may stand for a name of the given kind.
+// Godot keeps "match" and "tool" usable as names, so a keyword is not reserved
+// everywhere, and after a dot or an '@' it relaxes further still.
+func isNameToken(tok token.Token, kind nameKind) bool {
+	if tok.Type == token.Identifier {
+		return true
+	}
+	if !token.IsKeyword(tok.Type) {
 		return false
 	}
-	c := tok.Lexeme[0]
-	return c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+	switch kind {
+	case annotationName:
+		return true
+	case memberName:
+		return tok.Type != token.True && tok.Type != token.False && tok.Type != token.Null
+	}
+	return tok.Type == token.Match || tok.Type == token.Tool
 }
 
-func (p *parser) expectName(message string) (token.Token, error) {
-	if isNameToken(p.peek()) {
+func (p *parser) expectName(kind nameKind, message string) (token.Token, error) {
+	if isNameToken(p.peek(), kind) {
 		return p.advance(), nil
 	}
 	return token.Token{}, p.error(p.peek(), message)

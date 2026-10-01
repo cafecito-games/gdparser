@@ -140,7 +140,7 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 	case token.Func:
 		return p.parseLambda(tok)
 	default:
-		if isNameToken(tok) {
+		if isNameToken(tok, declaredName) {
 			return &ast.Identifier{Base: base(tok.Span), Name: tok.Lexeme}, nil
 		}
 		return nil, p.error(tok, "expected expression")
@@ -180,7 +180,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 				Arguments: arguments, Comments: comments,
 			}
 		case p.match(token.Dot):
-			property, err := p.expectName("expected property name after '.'")
+			property, err := p.expectName(memberName, "expected property name after '.'")
 			if err != nil {
 				return nil, err
 			}
@@ -210,7 +210,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	name := ""
 	var nameSpan token.Span
 	if !p.at(token.LParen) {
-		named, err := p.expectName("expected lambda name or '(' after func")
+		named, err := p.expectName(declaredName, "expected lambda name or '(' after func")
 		if err != nil {
 			return nil, err
 		}
@@ -247,13 +247,13 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 
 func (p *parser) parseTypeExpression() (ast.Expression, error) {
 	start := p.peek()
-	if !isNameToken(start) {
+	if !isNameToken(start, declaredName) {
 		return nil, p.error(start, "expected type name")
 	}
 	var name strings.Builder
 	name.WriteString(p.advance().Lexeme)
 	for p.match(token.Dot) {
-		part, err := p.expectName("expected type name after '.'")
+		part, err := p.expectName(declaredName, "expected type name after '.'")
 		if err != nil {
 			return nil, err
 		}
@@ -447,12 +447,12 @@ func (p *parser) parsePattern() (ast.Expression, error) {
 	switch {
 	case p.at(token.Var):
 		keyword := p.advance()
-		// A bind name is a plain identifier. The wildcard "_" names nothing, so
-		// Godot rejects it here even though it is a pattern of its own.
-		if p.peek().Type != token.Identifier || p.peek().Lexeme == "_" {
+		// The wildcard "_" names nothing, so Godot rejects it here even though
+		// it is a pattern of its own.
+		if !isNameToken(p.peek(), declaredName) || p.peek().Lexeme == "_" {
 			return nil, p.error(p.peek(), "expected bind name after 'var'")
 		}
-		name, err := p.expectName("expected bind name after 'var'")
+		name, err := p.expectName(declaredName, "expected bind name after 'var'")
 		if err != nil {
 			return nil, err
 		}

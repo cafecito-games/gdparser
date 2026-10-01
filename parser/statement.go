@@ -9,7 +9,7 @@ import (
 
 func (p *parser) parseAnnotation() (ast.Statement, error) {
 	start := p.advance()
-	name, err := p.expectName("expected annotation name")
+	name, err := p.expectName(annotationName, "expected annotation name")
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (p *parser) parseVariable() (ast.Statement, error) {
 }
 
 func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) (ast.Statement, error) {
-	name, err := p.expectName("expected variable name")
+	name, err := p.expectName(declaredName, "expected variable name")
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 			}
 			continue
 		}
-		accessor, err := p.expectName("expected get or set accessor")
+		accessor, err := p.expectName(declaredName, "expected get or set accessor")
 		if err != nil {
 			return err
 		}
@@ -222,7 +222,7 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 			parameter := "value"
 			var parameterSpan token.Span
 			if p.match(token.LParen) {
-				name, nameErr := p.expectName("expected setter parameter")
+				name, nameErr := p.expectName(declaredName, "expected setter parameter")
 				if nameErr != nil {
 					return nameErr
 				}
@@ -256,7 +256,7 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 }
 
 func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, error) {
-	name, err := p.expectName("expected function name")
+	name, err := p.expectName(declaredName, "expected function name")
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +323,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 				// every other place a parameter list breaks across lines.
 				p.takeCollectionComments(&comments, len(parameters))
 			}
-			name, err := p.expectName("expected parameter name")
+			name, err := p.expectName(declaredName, "expected parameter name")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -392,7 +392,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 
 func (p *parser) parseClass() (ast.Statement, error) {
 	start := p.advance()
-	name, err := p.expectName("expected class name")
+	name, err := p.expectName(declaredName, "expected class name")
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +420,7 @@ func (p *parser) parseClass() (ast.Statement, error) {
 
 func (p *parser) parseSignal() (ast.Statement, error) {
 	start := p.advance()
-	name, err := p.expectName("expected signal name")
+	name, err := p.expectName(declaredName, "expected signal name")
 	if err != nil {
 		return nil, err
 	}
@@ -442,7 +442,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 	start := p.advance()
 	name := ""
 	var nameSpan token.Span
-	if p.at(token.Identifier) && p.peekN(1).Type == token.LBrace {
+	if isNameToken(p.peek(), declaredName) && p.peekN(1).Type == token.LBrace {
 		nameToken := p.advance()
 		name = nameToken.Lexeme
 		nameSpan = nameToken.Span
@@ -460,11 +460,11 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 			p.takeCollectionComments(&comments, len(members))
 			continue
 		}
-		memberName, err := p.expectName("expected enum member")
+		name, err := p.expectName(declaredName, "expected enum member")
 		if err != nil {
 			return nil, err
 		}
-		member := ast.EnumMember{Base: base(memberName.Span), Name: memberName.Lexeme, NameSpan: memberName.Span}
+		member := ast.EnumMember{Base: base(name.Span), Name: name.Lexeme, NameSpan: name.Span}
 		if p.at(token.Assign) {
 			operator := p.advance()
 			member.OperatorSpan = operator.Span
@@ -558,7 +558,7 @@ func (p *parser) parseWhile() (ast.Statement, error) {
 
 func (p *parser) parseFor() (ast.Statement, error) {
 	start := p.advance()
-	variable, err := p.expectName("expected loop variable")
+	variable, err := p.expectName(declaredName, "expected loop variable")
 	if err != nil {
 		return nil, err
 	}
@@ -773,6 +773,11 @@ func (p *parser) parseTypeInto(comments *[]ast.CollectionComment, index int, sto
 		}
 		if depth == 0 && stop[tok.Type] {
 			break
+		}
+		if token.IsKeyword(tok.Type) && !isNameToken(tok, declaredName) {
+			// A type is built from names, dots, brackets and commas, so a
+			// reserved keyword here is not a type Godot would accept.
+			return "", token.Span{}, p.error(tok, "expected type name")
 		}
 		switch tok.Type {
 		case token.LBracket:
