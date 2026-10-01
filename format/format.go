@@ -248,6 +248,9 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 					lines = append(lines, text(p.commentText(comment)))
 				}
 			}
+			for _, annotation := range matchCase.Annotations {
+				lines = append(lines, p.annotationLine(annotation))
+			}
 			lines = append(lines, p.matchCase(matchCase))
 		}
 		for _, trailing := range []bool{false, true} {
@@ -393,6 +396,16 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 		members[index] = text(member.Name)
 	}
 	return concat(text(header+" "), p.collection(enumLayout, plainItems(members), node.Comments))
+}
+
+// annotationLine renders an annotation that stands on a line of its own, with
+// the comment that ended that line when it carries one.
+func (p *printer) annotationLine(annotation *ast.Annotation) doc {
+	rendered := p.statement(annotation)
+	if annotation.TrailingComment != nil {
+		rendered = concat(rendered, text("  "+p.commentText(annotation.TrailingComment)))
+	}
+	return rendered
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {

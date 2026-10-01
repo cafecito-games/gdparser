@@ -106,11 +106,13 @@ func (p *parser) pushMultiline(multiline bool) {
 // may stand in for the end of the statement holding it, but only while the
 // expression has not moved on, and a closing bracket moves it on.
 //
-// This is a deliberate departure from upstream. Read literally, Godot carries
-// lambda_ended past the closing bracket in 4.6 and 4.7 alike, so the guard in
-// parse_precedence would stop it reading the "or" in
-// "a.any(func(): return x) or b". The engine accepts that source, and widely used
-// add-ons are written that way, so the mark is dropped with the bracket here.
+// This is a deliberate departure from a literal reading of upstream. Godot sets
+// lambda_ended and does not clear it at the closing bracket, in 4.6 and 4.7
+// alike, so the guard at the top of parse_precedence appears to stop it reading
+// the "or" in "a.any(func(): return x) or b". Published GDScript is written that
+// way all the same, so something must accept it: the shape is in vest 1.10.4, a
+// third-party test library, at vest-defs.gd:42. The mark is dropped with the
+// bracket here so that such source parses.
 func (p *parser) popMultiline() {
 	p.multilineStack = p.multilineStack[:len(p.multilineStack)-1]
 	p.lambdaEnded = false
@@ -337,7 +339,7 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		if p.at(token.Func) {
 			keyword := p.advance()
 			stmt, err := p.parseFunction(keyword, static)
-			return stmt, true, err
+			return stmt, hasBody(stmt), err
 		}
 		if p.at(token.Var) {
 			keyword := p.advance()
@@ -352,7 +354,7 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 	case token.Func:
 		keyword := p.advance()
 		stmt, err := p.parseFunction(keyword, token.Token{})
-		return stmt, true, err
+		return stmt, hasBody(stmt), err
 	case token.Class:
 		stmt, err := p.parseClass()
 		return stmt, true, err
@@ -405,6 +407,16 @@ func (p *parser) parseSuiteFor(forLambda bool) ([]ast.Statement, token.Position,
 		headerComment = commentNode(p.advance())
 	}
 	if !p.at(token.Newline) {
+		if forLambda && !beginsStatement(p.peek().Type) {
+			// A lambda may carry no body at all, as "func():" written inside an
+			// expression does. Godot reads the body as empty and ends it here,
+			// leaving what follows to the expression the lambda sits in.
+			body := []ast.Statement{}
+			if headerComment != nil {
+				body = append(body, headerComment)
+			}
+			return body, p.previous().Span.End, nil
+		}
 		stmt, _, err := p.parseStatement()
 		if err != nil {
 			return nil, token.Position{}, err
@@ -517,6 +529,14 @@ func (p *parser) error(tok token.Token, message string) error {
 		return p.wrap(p.scanErr)
 	}
 	return &Error{Filename: p.filename, Token: tok, Message: message}
+}
+
+// hasBody reports whether a function declaration read its own block. An abstract
+// one did not, so it ends with its line like any other simple statement, which is
+// what lets a semicolon follow it.
+func hasBody(statement ast.Statement) bool {
+	declaration, ok := statement.(*ast.FunctionDeclaration)
+	return ok && !declaration.Abstract
 }
 
 // expectIdentifier consumes a token that may stand where GDScript expects an

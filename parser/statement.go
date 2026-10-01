@@ -749,6 +749,8 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 		return nil, err
 	}
 	var cases []ast.MatchCase
+	// Annotations stand on their own lines ahead of the branch they decorate.
+	var pendingAnnotations []*ast.Annotation
 	for !p.at(token.Dedent, token.EOF) {
 		blankLines := p.takeBlankLines()
 		for p.match(token.Newline) {
@@ -765,6 +767,23 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			p.match(token.Newline)
 			continue
 		}
+		if p.at(token.At) {
+			annotation, err := p.parseAnnotation()
+			if err != nil {
+				return nil, err
+			}
+			decoration := annotation.(*ast.Annotation)
+			decoration.OwnLine = true
+			decoration.BlankLinesBefore = blankLines
+			if p.at(token.Comment) {
+				decoration.TrailingComment = commentNode(p.advance())
+			}
+			if _, err := p.expect(token.Newline, "expected end of line after the annotation"); err != nil {
+				return nil, err
+			}
+			pendingAnnotations = append(pendingAnnotations, decoration)
+			continue
+		}
 		if p.at(token.Pass) {
 			// A bare "pass" stands for a match that handles nothing. Godot
 			// accepts it beside real branches too, so it is kept as a case
@@ -776,7 +795,8 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			}
 			continue
 		}
-		matchCase := ast.MatchCase{}
+		matchCase := ast.MatchCase{Annotations: pendingAnnotations}
+		pendingAnnotations = nil
 		var comma token.Token
 		for {
 			pattern, err := p.parsePattern()
@@ -820,6 +840,9 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 		}
 		matchCase.SourceSpan.End = componentEnd(matchCase.Body, caseEnd)
 		cases = append(cases, matchCase)
+	}
+	if len(pendingAnnotations) > 0 {
+		return nil, p.error(p.peek(), "the annotation decorates no match branch")
 	}
 	end, err := p.expect(token.Dedent, "expected end of match block")
 	if err != nil {

@@ -251,10 +251,13 @@ func (*EnumDeclaration) statement() {}
 // nothing and runs nothing.
 type MatchCase struct {
 	Base
-	Patterns []Expression `json:"patterns"`
-	Guard    Expression   `json:"guard,omitempty"`
-	WhenSpan token.Span   `json:"when_span,omitempty"`
-	Body     []Statement  `json:"body"`
+	// Annotations holds the annotations written on their own lines ahead of the
+	// branch. Godot allows only @warning_ignore here.
+	Annotations []*Annotation `json:"annotations,omitempty"`
+	Patterns    []Expression  `json:"patterns"`
+	Guard       Expression    `json:"guard,omitempty"`
+	WhenSpan    token.Span    `json:"when_span,omitempty"`
+	Body        []Statement   `json:"body"`
 }
 
 // MatchStatement performs pattern matching.
