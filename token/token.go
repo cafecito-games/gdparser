@@ -122,6 +122,19 @@ var keywords = map[string]Type{
 	"static": Static, "tool": Tool, "true": True, "var": Var, "while": While,
 }
 
+// keywordTypes holds the type of every keyword, so a token can be recognized
+// as one without its text.
+var keywordTypes = func() map[Type]bool {
+	types := make(map[Type]bool, len(keywords))
+	for _, typ := range keywords {
+		types[typ] = true
+	}
+	return types
+}()
+
+// IsKeyword reports whether typ is one of the GDScript keywords.
+func IsKeyword(typ Type) bool { return keywordTypes[typ] }
+
 // LookupIdentifier returns a keyword token when text is reserved.
 func LookupIdentifier(text string) Type {
 	if typ, ok := keywords[text]; ok {

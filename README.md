@@ -183,7 +183,12 @@ corpus, including:
 - operators with GDScript precedence and associativity;
 - multiline expressions, escaped identifiers, `$`/`%` node paths, and
   statement continuations;
-- line and inline comments represented in the AST.
+- line and inline comments represented in the AST;
+- the keywords Godot still accepts as names. `match` and `tool` are contextual,
+  so they may name anything a declaration binds; every keyword but a literal may
+  name a member after a dot; and an annotation name after `@` may be any keyword
+  at all. A reserved keyword elsewhere is a positioned error, as it is for
+  Godot.
 
 ### Text scenes and resources
 
