@@ -55,8 +55,14 @@ type lexer struct {
 	// or zero when none is pending. A lambda header is only tracked inside
 	// brackets, so a real pending header always sits at a depth above zero.
 	lambdaHeaderDepth int
-	indents           []int
-	tokens            []token.Token
+	// lineIndent is the indentation width of the logical line being scanned.
+	// A continuation keeps the width of the line it started on.
+	lineIndent int
+	// matches holds the match statements open inside a lambda body, innermost
+	// last, so a comma can be recognized as a pattern separator.
+	matches []matchBlock
+	indents []int
+	tokens  []token.Token
 	// codeLineIndent, codeLineStart and codeLineFound cache the lookahead that
 	// nextCodeIndent performs. The cache holds while the scan stays before
 	// codeLineStart, which is the end of source when no code line follows.
@@ -71,6 +77,74 @@ type lexer struct {
 type lambdaLayout struct {
 	depth       int
 	indentDepth int
+}
+
+// matchBlock records one match statement open inside a multiline lambda body.
+// A branch's patterns are comma separated, so a comma on a branch's header line
+// separates patterns instead of ending the body.
+type matchBlock struct {
+	// indent is the indentation width of the line holding the match keyword.
+	indent int
+	// branchIndent is the indentation width of the branch header lines, or
+	// noBranchIndent until the first branch establishes it.
+	branchIndent int
+	// layout is the number of open lambda bodies when the match was opened, so
+	// the block is discarded with the body that holds it.
+	layout int
+}
+
+// noBranchIndent marks a match block whose branch indentation is not yet known.
+// Indentation is never negative, so no real width collides with it.
+const noBranchIndent = -1
+
+// onMatchBranchHeader reports whether the scan sits on the header line of a
+// match branch belonging to the innermost open lambda body, where a comma
+// separates the branch's patterns.
+func (l *lexer) onMatchBranchHeader() bool {
+	if len(l.matches) == 0 {
+		return false
+	}
+	block := l.matches[len(l.matches)-1]
+	return block.layout == len(l.layouts) && block.branchIndent == l.lineIndent
+}
+
+// startsStatement reports whether the token just emitted opened a statement.
+// Godot accepts match as a name, so the keyword also appears as a member or a
+// declared identifier, where it opens no block.
+func (l *lexer) startsStatement() bool {
+	if len(l.tokens) < 2 {
+		return true
+	}
+	switch l.tokens[len(l.tokens)-2].Type {
+	case token.Newline, token.Indent, token.Dedent, token.Semicolon, token.Colon:
+		return true
+	}
+	return false
+}
+
+// openMatchBlock records a match statement that begins inside a lambda body.
+func (l *lexer) openMatchBlock() {
+	l.matches = append(l.matches, matchBlock{
+		indent:       l.lineIndent,
+		branchIndent: noBranchIndent,
+		layout:       len(l.layouts),
+	})
+}
+
+// trackMatchIndent updates the open match blocks for a line of code indented to
+// columns: a line at or outside a match's own indentation has left it, and the
+// first line inside one establishes where its branch headers sit.
+func (l *lexer) trackMatchIndent(columns int) {
+	for len(l.matches) > 0 && columns <= l.matches[len(l.matches)-1].indent {
+		l.matches = l.matches[:len(l.matches)-1]
+	}
+	if len(l.matches) == 0 {
+		return
+	}
+	block := &l.matches[len(l.matches)-1]
+	if block.branchIndent == noBranchIndent {
+		block.branchIndent = columns
+	}
 }
 
 // layoutDepth returns the bracket depth of the innermost open lambda body, or
@@ -157,6 +231,7 @@ func (l *lexer) scanIndent() error {
 		return nil
 	}
 	l.atStart = false
+	l.lineIndent = columns
 	if len(l.layouts) > 0 && l.depth == l.layoutDepth() && closesLambdaLayout(l.peek()) {
 		// A comma or closing bracket on its own line ends the lambda body
 		// rather than continuing it, so endLambdaLayout unwinds the
@@ -190,6 +265,7 @@ func (l *lexer) scanIndent() error {
 		}
 		return nil
 	}
+	l.trackMatchIndent(columns)
 	if columns > top {
 		l.indents = append(l.indents, columns)
 		l.emit(token.Indent, "", p)
@@ -328,6 +404,9 @@ func (l *lexer) scanIdentifier(start token.Position) {
 	if typ == token.Func && l.depth > l.layoutDepth() {
 		l.lambdaHeaderDepth = l.depth
 	}
+	if typ == token.Match && len(l.layouts) > 0 && l.depth == l.layoutDepth() && l.startsStatement() {
+		l.openMatchBlock()
+	}
 }
 
 func (l *lexer) scanNumber(start token.Position) {
@@ -428,7 +507,8 @@ func (l *lexer) scanOperator(start token.Position) error {
 	remaining := string(l.source[l.offset:])
 	for _, op := range operators {
 		if strings.HasPrefix(remaining, op.text) {
-			if op.typ == token.Comma && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
+			if op.typ == token.Comma && len(l.layouts) > 0 && l.depth == l.layoutDepth() &&
+				!l.onMatchBranchHeader() {
 				l.endLambdaLayout(start)
 			}
 			if (op.typ == token.RParen || op.typ == token.RBracket || op.typ == token.RBrace) && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
@@ -447,6 +527,9 @@ func (l *lexer) scanOperator(start token.Position) error {
 				for len(l.layouts) > 0 && l.depth < l.layoutDepth() {
 					l.layouts = l.layouts[:len(l.layouts)-1]
 					l.lambdaHeaderDepth = 0
+				}
+				for len(l.matches) > 0 && l.matches[len(l.matches)-1].layout > len(l.layouts) {
+					l.matches = l.matches[:len(l.matches)-1]
 				}
 			}
 			l.emit(op.typ, op.text, start)
@@ -474,6 +557,9 @@ func (l *lexer) endLambdaLayout(position token.Position) {
 	}
 	l.layouts = l.layouts[:len(l.layouts)-1]
 	l.lambdaHeaderDepth = 0
+	for len(l.matches) > 0 && l.matches[len(l.matches)-1].layout > len(l.layouts) {
+		l.matches = l.matches[:len(l.matches)-1]
+	}
 }
 
 func (l *lexer) blockFollows() bool {
