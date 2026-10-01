@@ -14,8 +14,10 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 		return nil, err
 	}
 	var arguments []ast.Expression
+	var comments []ast.CollectionComment
 	end := name.Span.End
 	if p.match(token.LParen) {
+		p.takeCollectionComments(&comments, 0)
 		if !p.at(token.RParen) {
 			for {
 				argument, err := p.parseExpression(0)
@@ -23,7 +25,12 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 					return nil, err
 				}
 				arguments = append(arguments, argument)
+				p.takeCollectionComments(&comments, len(arguments))
 				if !p.match(token.Comma) {
+					break
+				}
+				p.takeCollectionComments(&comments, len(arguments))
+				if p.at(token.RParen) {
 					break
 				}
 			}
@@ -36,6 +43,7 @@ func (p *parser) parseAnnotation() (ast.Statement, error) {
 	}
 	return &ast.Annotation{
 		Base: spanFrom(start.Span.Start, end), Name: name.Lexeme, NameSpan: name.Span, Arguments: arguments,
+		Comments: comments,
 	}, nil
 }
 
@@ -211,7 +219,7 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	if err != nil {
 		return nil, err
 	}
-	parameters, err := p.parseParameters()
+	parameters, parameterComments, err := p.parseParameters()
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +241,7 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 			Base: spanFrom(start, p.previous().Span.End), Name: name.Lexeme, NameSpan: name.Span, Parameters: parameters,
 			ReturnType: returnType, ReturnTypeSpan: returnTypeSpan, ReturnArrowSpan: returnArrowSpan,
 			Static: static.Type == token.Static, StaticSpan: static.Span, KeywordSpan: keyword.Span, Abstract: true,
+			ParameterComments: parameterComments,
 		}, nil
 	}
 	body, end, err := p.parseSuite()
@@ -243,25 +252,28 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 		Base: spanFrom(start, end), Name: name.Lexeme, NameSpan: name.Span, Parameters: parameters,
 		ReturnType: returnType, ReturnTypeSpan: returnTypeSpan, ReturnArrowSpan: returnArrowSpan,
 		Static: static.Type == token.Static, StaticSpan: static.Span, KeywordSpan: keyword.Span, Body: body,
+		ParameterComments: parameterComments,
 	}, nil
 }
 
-func (p *parser) parseParameters() ([]ast.Parameter, error) {
+func (p *parser) parseParameters() ([]ast.Parameter, []ast.CollectionComment, error) {
 	if _, err := p.expect(token.LParen, "expected '('"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var parameters []ast.Parameter
+	var comments []ast.CollectionComment
+	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RParen) {
 		for {
 			name, err := p.expectName("expected parameter name")
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			parameter := ast.Parameter{Base: base(name.Span), Name: name.Lexeme, NameSpan: name.Span}
 			if p.match(token.Colon) {
 				parameter.Type, parameter.TypeSpan = p.parseTypeUntil(token.Assign, token.InferAssign, token.Comma, token.RParen)
 				if parameter.Type == "" {
-					return nil, p.error(p.peek(), "expected parameter type")
+					return nil, nil, p.error(p.peek(), "expected parameter type")
 				}
 				parameter.SourceSpan.End = parameter.TypeSpan.End
 			}
@@ -270,23 +282,25 @@ func (p *parser) parseParameters() ([]ast.Parameter, error) {
 				parameter.DefaultOperatorSpan = operator.Span
 				parameter.Default, err = p.parseExpression(0)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				parameter.SourceSpan.End = parameter.Default.Span().End
 			}
 			parameters = append(parameters, parameter)
+			p.takeCollectionComments(&comments, len(parameters))
 			if !p.match(token.Comma) {
 				break
 			}
+			p.takeCollectionComments(&comments, len(parameters))
 			if p.at(token.RParen) {
 				break
 			}
 		}
 	}
 	if _, err := p.expect(token.RParen, "expected ')' after parameters"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return parameters, nil
+	return parameters, comments, nil
 }
 
 func (p *parser) parseClass() (ast.Statement, error) {
@@ -321,15 +335,16 @@ func (p *parser) parseSignal() (ast.Statement, error) {
 		return nil, err
 	}
 	var parameters []ast.Parameter
+	var parameterComments []ast.CollectionComment
 	if p.at(token.LParen) {
-		parameters, err = p.parseParameters()
+		parameters, parameterComments, err = p.parseParameters()
 		if err != nil {
 			return nil, err
 		}
 	}
 	return &ast.SignalDeclaration{
 		Base: spanFrom(start.Span.Start, p.previous().Span.End), Name: name.Lexeme, NameSpan: name.Span,
-		KeywordSpan: start.Span, Parameters: parameters,
+		KeywordSpan: start.Span, Parameters: parameters, ParameterComments: parameterComments,
 	}, nil
 }
 
@@ -346,21 +361,20 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 		return nil, err
 	}
 	var members []ast.EnumMember
-	var pendingComments []*ast.Comment
+	var comments []ast.CollectionComment
 	for !p.at(token.RBrace) {
 		if p.match(token.Comma) {
 			continue
 		}
 		if p.at(token.Comment) {
-			pendingComments = append(pendingComments, commentNode(p.advance()))
+			p.takeCollectionComments(&comments, len(members))
 			continue
 		}
 		memberName, err := p.expectName("expected enum member")
 		if err != nil {
 			return nil, err
 		}
-		member := ast.EnumMember{Base: base(memberName.Span), Name: memberName.Lexeme, NameSpan: memberName.Span, Comments: pendingComments}
-		pendingComments = nil
+		member := ast.EnumMember{Base: base(memberName.Span), Name: memberName.Lexeme, NameSpan: memberName.Span}
 		if p.at(token.Assign) {
 			operator := p.advance()
 			member.OperatorSpan = operator.Span
@@ -371,9 +385,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 			member.SourceSpan.End = member.Value.Span().End
 		}
 		members = append(members, member)
-		for p.at(token.Comment) {
-			pendingComments = append(pendingComments, commentNode(p.advance()))
-		}
+		p.takeCollectionComments(&comments, len(members))
 		if !p.match(token.Comma) {
 			break
 		}
@@ -387,7 +399,7 @@ func (p *parser) parseEnum() (ast.Statement, error) {
 	}
 	return &ast.EnumDeclaration{
 		Base: spanFrom(start.Span.Start, end.Span.End), Name: name, NameSpan: nameSpan,
-		KeywordSpan: start.Span, Members: members,
+		KeywordSpan: start.Span, Members: members, Comments: comments,
 	}, nil
 }
 

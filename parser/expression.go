@@ -152,8 +152,8 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 		switch {
 		case p.match(token.LParen):
 			var arguments []ast.Expression
-			for p.match(token.Comment) {
-			}
+			var comments []ast.CollectionComment
+			p.takeCollectionComments(&comments, 0)
 			if !p.at(token.RParen) {
 				for {
 					arg, err := p.parseExpression(0)
@@ -161,13 +161,11 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 						return nil, err
 					}
 					arguments = append(arguments, arg)
-					for p.match(token.Comment) {
-					}
+					p.takeCollectionComments(&comments, len(arguments))
 					if !p.match(token.Comma) {
 						break
 					}
-					for p.match(token.Comment) {
-					}
+					p.takeCollectionComments(&comments, len(arguments))
 					if p.at(token.RParen) {
 						break
 					}
@@ -177,7 +175,10 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 			if err != nil {
 				return nil, err
 			}
-			expr = &ast.CallExpression{Base: spanFrom(expr.Span().Start, end.Span.End), Callee: expr, Arguments: arguments}
+			expr = &ast.CallExpression{
+				Base: spanFrom(expr.Span().Start, end.Span.End), Callee: expr,
+				Arguments: arguments, Comments: comments,
+			}
 		case p.match(token.Dot):
 			property, err := p.expectName("expected property name after '.'")
 			if err != nil {
@@ -204,7 +205,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 }
 
 func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
-	parameters, err := p.parseParameters()
+	parameters, parameterComments, err := p.parseParameters()
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +226,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	return &ast.LambdaExpression{
 		Base: spanFrom(start.Span.Start, end), Parameters: parameters, ReturnType: returnType,
 		ReturnTypeSpan: returnTypeSpan, ReturnArrowSpan: returnArrowSpan, KeywordSpan: start.Span,
-		Body: body, Inline: inline,
+		Body: body, Inline: inline, ParameterComments: parameterComments,
 	}, nil
 }
 
@@ -267,8 +268,8 @@ func (p *parser) parseTypeExpression() (ast.Expression, error) {
 
 func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 	var elements []ast.Expression
-	for p.match(token.Comment) {
-	}
+	var comments []ast.CollectionComment
+	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RBracket) {
 		for {
 			element, err := p.parseExpression(0)
@@ -276,13 +277,11 @@ func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 				return nil, err
 			}
 			elements = append(elements, element)
-			for p.match(token.Comment) {
-			}
+			p.takeCollectionComments(&comments, len(elements))
 			if !p.match(token.Comma) {
 				break
 			}
-			for p.match(token.Comment) {
-			}
+			p.takeCollectionComments(&comments, len(elements))
 			if p.at(token.RBracket) {
 				break
 			}
@@ -292,13 +291,15 @@ func (p *parser) parseArray(start token.Token) (ast.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ast.ArrayLiteral{Base: spanFrom(start.Span.Start, end.Span.End), Elements: elements}, nil
+	return &ast.ArrayLiteral{
+		Base: spanFrom(start.Span.Start, end.Span.End), Elements: elements, Comments: comments,
+	}, nil
 }
 
 func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 	var entries []ast.DictionaryEntry
-	for p.match(token.Comment) {
-	}
+	var comments []ast.CollectionComment
+	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RBrace) {
 		for {
 			key, err := p.parseExpression(0)
@@ -313,13 +314,11 @@ func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 				return nil, err
 			}
 			entries = append(entries, ast.DictionaryEntry{Key: key, Value: value})
-			for p.match(token.Comment) {
-			}
+			p.takeCollectionComments(&comments, len(entries))
 			if !p.match(token.Comma) {
 				break
 			}
-			for p.match(token.Comment) {
-			}
+			p.takeCollectionComments(&comments, len(entries))
 			if p.at(token.RBrace) {
 				break
 			}
@@ -329,7 +328,9 @@ func (p *parser) parseDictionary(start token.Token) (ast.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ast.DictionaryLiteral{Base: spanFrom(start.Span.Start, end.Span.End), Entries: entries}, nil
+	return &ast.DictionaryLiteral{
+		Base: spanFrom(start.Span.Start, end.Span.End), Entries: entries, Comments: comments,
+	}, nil
 }
 
 func (p *parser) parseNodePath(start token.Token) (ast.Expression, error) {

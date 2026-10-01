@@ -1,6 +1,7 @@
 package ast_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cafecito-games/gdparser"
@@ -85,5 +86,46 @@ func TestTriviaOfReportsNilForUnsupportedStatements(t *testing.T) {
 func TestAnnotationsReportsNilForOtherNodes(t *testing.T) {
 	if got := ast.Annotations(&ast.Identifier{Name: "x"}); got != nil {
 		t.Fatalf("Annotations(identifier) = %#v", got)
+	}
+}
+
+func TestJSONValueIncludesCollectionComments(t *testing.T) {
+	file, err := gdparser.ParseString("var x = [\n\t1,  # one\n\t# two\n\t2,\n]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := ast.JSONValue(file).(map[string]any)["statements"].([]any)[0].(map[string]any)
+	array := statement["value"].(map[string]any)
+	comments, ok := array["comments"].([]any)
+	if !ok || len(comments) != 2 {
+		t.Fatalf("comments = %#v", array["comments"])
+	}
+	first := comments[0].(map[string]any)
+	if text := first["comment"].(map[string]any)["text"]; text != "# one" {
+		t.Errorf("comment 0 text = %#v, want \"# one\"", text)
+	}
+	if index := first["index"]; index != int64(1) {
+		t.Errorf("comment 0 index = %#v, want 1", index)
+	}
+	if trailing := first["trailing"]; trailing != true {
+		t.Errorf("comment 0 trailing = %#v, want true", trailing)
+	}
+	second := comments[1].(map[string]any)
+	if _, present := second["trailing"]; present {
+		t.Errorf("trailing should be omitted for an own-line comment: %#v", second)
+	}
+}
+
+func TestDumpIncludesCollectionComments(t *testing.T) {
+	file, err := gdparser.ParseString("var x = [\n\t# c\n\t1,\n]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	if err := ast.Dump(&builder, file); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(builder.String(), "Comment # c") {
+		t.Fatalf("dump omitted the comment:\n%s", builder.String())
 	}
 }

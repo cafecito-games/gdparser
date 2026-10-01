@@ -69,14 +69,32 @@ func Children(node Node) []Node {
 			out = append(out, stmt)
 		}
 	}
+	// addCollectionComments appends the comments anchored to index, so that a
+	// bracketed construct yields its comments in source order.
+	addCollectionComments := func(comments []CollectionComment, index int) {
+		for _, comment := range comments {
+			if comment.Index == index && comment.Comment != nil {
+				out = append(out, comment.Comment)
+			}
+		}
+	}
+	addParameters := func(parameters []Parameter, comments []CollectionComment) {
+		for index, parameter := range parameters {
+			addCollectionComments(comments, index)
+			addExpr(parameter.Default)
+		}
+		addCollectionComments(comments, len(parameters))
+	}
 
 	switch n := node.(type) {
 	case *File:
 		addStmts(n.Statements)
 	case *Annotation:
-		for _, arg := range n.Arguments {
+		for index, arg := range n.Arguments {
+			addCollectionComments(n.Comments, index)
 			addExpr(arg)
 		}
+		addCollectionComments(n.Comments, len(n.Arguments))
 	case *Directive:
 		addExpr(n.Value)
 		addExpr(n.Extends)
@@ -91,27 +109,31 @@ func Children(node Node) []Node {
 		addExpr(n.Alternative)
 	case *CallExpression:
 		addExpr(n.Callee)
-		for _, arg := range n.Arguments {
+		for index, arg := range n.Arguments {
+			addCollectionComments(n.Comments, index)
 			addExpr(arg)
 		}
+		addCollectionComments(n.Comments, len(n.Arguments))
 	case *MemberExpression:
 		addExpr(n.Object)
 	case *SubscriptExpression:
 		addExpr(n.Object)
 		addExpr(n.Index)
 	case *ArrayLiteral:
-		for _, elem := range n.Elements {
+		for index, elem := range n.Elements {
+			addCollectionComments(n.Comments, index)
 			addExpr(elem)
 		}
+		addCollectionComments(n.Comments, len(n.Elements))
 	case *DictionaryLiteral:
-		for _, entry := range n.Entries {
+		for index, entry := range n.Entries {
+			addCollectionComments(n.Comments, index)
 			addExpr(entry.Key)
 			addExpr(entry.Value)
 		}
+		addCollectionComments(n.Comments, len(n.Entries))
 	case *LambdaExpression:
-		for _, parameter := range n.Parameters {
-			addExpr(parameter.Default)
-		}
+		addParameters(n.Parameters, n.ParameterComments)
 		addStmts(n.Body)
 	case *ExpressionStatement:
 		addExpr(n.Expression)
@@ -139,23 +161,18 @@ func Children(node Node) []Node {
 		addExpr(n.Iterable)
 		addStmts(n.Body)
 	case *FunctionDeclaration:
-		for _, parameter := range n.Parameters {
-			addExpr(parameter.Default)
-		}
+		addParameters(n.Parameters, n.ParameterComments)
 		addStmts(n.Body)
 	case *ClassDeclaration:
 		addStmts(n.Body)
 	case *SignalDeclaration:
-		for _, parameter := range n.Parameters {
-			addExpr(parameter.Default)
-		}
+		addParameters(n.Parameters, n.ParameterComments)
 	case *EnumDeclaration:
-		for _, member := range n.Members {
-			for _, comment := range member.Comments {
-				out = append(out, comment)
-			}
+		for index, member := range n.Members {
+			addCollectionComments(n.Comments, index)
 			addExpr(member.Value)
 		}
+		addCollectionComments(n.Comments, len(n.Members))
 	case *MatchStatement:
 		addExpr(n.Value)
 		for _, matchCase := range n.Cases {
