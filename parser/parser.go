@@ -259,7 +259,7 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			flush()
 			return statements, nil
 		}
-		stmt, compound, err := p.parseStatement()
+		stmt, compound, err := p.parseStatement(classBody)
 		if err != nil {
 			return nil, err
 		}
@@ -420,7 +420,12 @@ func attachAnnotations(statement ast.Statement, annotations []*ast.Annotation) b
 	return true
 }
 
-func (p *parser) parseStatement() (ast.Statement, bool, error) {
+// parseStatement reads one statement. classBody says the statement belongs to a
+// class body, which holds the declarations a function body may not.
+func (p *parser) parseStatement(classBody bool) (ast.Statement, bool, error) {
+	if !classBody && beginsClassMemberOnly(p.peek().Type) {
+		return nil, false, p.error(p.peek(), "unexpected "+describe(p.peek())+" in a function body")
+	}
 	switch p.peek().Type {
 	case token.Comment:
 		return commentNode(p.advance()), false, nil
@@ -595,7 +600,7 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			}
 			return headerComments, static.Span.End, nil
 		}
-		stmt, _, err := p.parseStatement()
+		stmt, _, err := p.parseStatement(classBody)
 		if err != nil {
 			return nil, token.Position{}, err
 		}
@@ -612,7 +617,7 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 				if p.at(token.Newline, token.Comment) {
 					break
 				}
-				next, _, nextErr := p.parseStatement()
+				next, _, nextErr := p.parseStatement(false)
 				if nextErr != nil {
 					return nil, token.Position{}, nextErr
 				}
@@ -796,11 +801,9 @@ func isWord(typ token.Type) bool {
 // by finding that the expression it tried to read was not there.
 func beginsStatement(typ token.Type) bool {
 	switch typ {
-	case token.At, token.Extends, token.ClassName, token.Var, token.Const,
-		token.Static, token.Func, token.Class, token.Signal, token.Enum,
-		token.If, token.While, token.For, token.Match, token.Return,
-		token.Pass, token.Break, token.Continue, token.Breakpoint,
-		token.Assert, token.Comment:
+	case token.At, token.Var, token.Const, token.If, token.While, token.For,
+		token.Match, token.Return, token.Pass, token.Break, token.Continue,
+		token.Breakpoint, token.Assert, token.Comment:
 		return true
 	}
 	return beginsExpression(typ)
@@ -828,6 +831,19 @@ func beginsClassMember(typ token.Type) bool {
 	case token.At, token.Var, token.Const, token.Signal, token.Func,
 		token.Class, token.Enum, token.Static, token.Pass, token.Comment,
 		token.String, token.Extends, token.ClassName:
+		return true
+	}
+	return false
+}
+
+// beginsClassMemberOnly reports whether typ opens something only a class body
+// holds. Godot's parse_statement has no case for these keywords and none of them
+// has a prefix rule, so a function body reports that a statement was expected
+// where one of them is written.
+func beginsClassMemberOnly(typ token.Type) bool {
+	switch typ {
+	case token.Static, token.Class, token.Signal, token.Enum, token.Extends,
+		token.ClassName:
 		return true
 	}
 	return false
