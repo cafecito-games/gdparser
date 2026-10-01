@@ -256,13 +256,36 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 		return header
 	}
 	var accessors []doc
+	// A comment that ended the colon's line stays on it.
+	var colon []doc
+	colon = append(colon, text(":"))
+	for _, comment := range ast.CollectionCommentsAt(node.AccessorComments, 0, true) {
+		colon = append(colon, text("  "+p.commentText(comment)))
+	}
+	written := 0
+	addComments := func(index int) {
+		for _, trailing := range []bool{false, true} {
+			if trailing && index == 0 {
+				// Already written beside the colon.
+				continue
+			}
+			for _, comment := range ast.CollectionCommentsAt(node.AccessorComments, index, trailing) {
+				accessors = append(accessors, hardLine, text(p.commentText(comment)))
+			}
+		}
+	}
+	addComments(written)
 	if node.Getter != nil {
 		accessors = append(accessors, hardLine, text("get:"), p.suite(node.Getter))
+		written++
+		addComments(written)
 	}
 	if node.Setter != nil {
 		accessors = append(accessors, hardLine, text("set("+node.Setter.Parameter+"):"), p.suite(node.Setter.Body))
+		written++
+		addComments(written)
 	}
-	return concat(header, text(":"), nest(1, concat(accessors...)))
+	return concat(header, concat(colon...), nest(1, concat(accessors...)))
 }
 
 func (p *printer) function(node *ast.FunctionDeclaration) doc {

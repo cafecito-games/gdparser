@@ -139,9 +139,18 @@ func Children(node Node) []Node {
 		addExpr(n.Expression)
 	case *VariableDeclaration:
 		addExpr(n.Value)
+		// The accessors are emitted getter first, whatever order they were
+		// written in, and the comments between them follow that order.
+		addCollectionComments(n.AccessorComments, 0)
 		addStmts(n.Getter)
+		if n.Getter != nil && n.Setter != nil {
+			addCollectionComments(n.AccessorComments, 1)
+		}
 		if n.Setter != nil {
 			addStmts(n.Setter.Body)
+		}
+		if count := accessorCount(n); count > 0 {
+			addCollectionComments(n.AccessorComments, count)
 		}
 	case *Assignment:
 		addExpr(n.Target)
@@ -189,4 +198,16 @@ func Children(node Node) []Node {
 		}
 	}
 	return out
+}
+
+// accessorCount returns the number of property accessors declaration carries.
+func accessorCount(declaration *VariableDeclaration) int {
+	count := 0
+	if declaration.Getter != nil {
+		count++
+	}
+	if declaration.Setter != nil {
+		count++
+	}
+	return count
 }

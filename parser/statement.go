@@ -146,8 +146,28 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 	if _, err := p.expect(token.Colon, "expected ':' before property accessors"); err != nil {
 		return err
 	}
+	// A comment may end the colon's line, and more may sit inside the block
+	// outside an accessor body. None of them belongs to an accessor's suite, so
+	// they are held by the declaration.
+	var comments []ast.CollectionComment
+	accessors := 0
+	p.takeCollectionComments(&comments, accessors)
+	defer func() { declaration.AccessorComments = comments }()
 	if _, err := p.expect(token.Newline, "expected newline before property accessors"); err != nil {
 		return err
+	}
+	// A comment written at the declaration's own level sits ahead of the block
+	// it opens, since a comment-only line does not open one.
+	for {
+		for p.match(token.Newline) {
+		}
+		if !p.at(token.Comment) {
+			break
+		}
+		p.takeCollectionComments(&comments, accessors)
+		if _, err := p.expect(token.Newline, "expected end of comment"); err != nil {
+			return err
+		}
 	}
 	indent, err := p.expect(token.Indent, "expected indented property accessors")
 	if err != nil {
@@ -166,7 +186,7 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 			break
 		}
 		if p.at(token.Comment) {
-			p.advance()
+			p.takeCollectionComments(&comments, accessors)
 			if _, err := p.expect(token.Newline, "expected end of comment"); err != nil {
 				return err
 			}
@@ -178,6 +198,11 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 		}
 		switch accessor.Lexeme {
 		case "get":
+			// A property has one getter and one setter, so a repeated accessor
+			// would overwrite the one before it and lose its body.
+			if declaration.GetterKeywordSpan != (token.Span{}) {
+				return p.error(accessor, "a property may only have one getter")
+			}
 			if p.match(token.LParen) {
 				if _, err = p.expect(token.RParen, "expected ')' after get"); err != nil {
 					return err
@@ -188,6 +213,9 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 			declaration.GetterKeywordSpan = accessor.Span
 			declaration.GetterSpan = token.Span{Start: accessor.Span.Start, End: componentEnd(declaration.Getter, end)}
 		case "set":
+			if declaration.Setter != nil {
+				return p.error(accessor, "a property may only have one setter")
+			}
 			parameter := "value"
 			var parameterSpan token.Span
 			if p.match(token.LParen) {
@@ -214,6 +242,7 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 		if err != nil {
 			return err
 		}
+		accessors++
 	}
 	end, err := p.expect(token.Dedent, "expected end of property accessors")
 	if err != nil {
