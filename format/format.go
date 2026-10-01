@@ -125,6 +125,12 @@ func (p *printer) statement(statement ast.Statement) doc {
 	for _, annotation := range ast.Annotations(statement) {
 		parts = append(parts, p.annotation(annotation))
 		if annotation.OwnLine {
+			// An annotation on a line of its own carries the comment that ended
+			// that line. One written ahead of the declaration shares its line, so
+			// the declaration's own trailing comment is the only one there.
+			if annotation.TrailingComment != nil {
+				parts = append(parts, text("  "+p.commentText(annotation.TrailingComment)))
+			}
 			parts = append(parts, hardLine)
 			continue
 		}
@@ -145,9 +151,9 @@ func (p *printer) annotation(node *ast.Annotation) doc {
 		arguments := p.arguments(node.Arguments)
 		document = concat(document, p.collection(argumentLayout, arguments, node.Comments))
 	}
-	if node.TrailingComment != nil {
-		document = concat(document, text("  "+p.commentText(node.TrailingComment)))
-	}
+	// The comment that ended the annotation's line is written by whoever places
+	// the line, since an annotation sharing a declaration's line has none of its
+	// own.
 	return document
 }
 
@@ -258,7 +264,7 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 				}
 			}
 			for _, annotation := range matchCase.Annotations {
-				lines = append(lines, p.annotationLine(annotation))
+				lines = append(lines, p.statement(annotation))
 			}
 			lines = append(lines, p.matchCase(matchCase))
 		}
@@ -405,16 +411,6 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 		members[index] = text(member.Name)
 	}
 	return concat(text(header+" "), p.collection(enumLayout, plainItems(members), node.Comments))
-}
-
-// annotationLine renders an annotation that stands on a line of its own, with
-// the comment that ended that line when it carries one.
-func (p *printer) annotationLine(annotation *ast.Annotation) doc {
-	rendered := p.statement(annotation)
-	if annotation.TrailingComment != nil {
-		rendered = concat(rendered, text("  "+p.commentText(annotation.TrailingComment)))
-	}
-	return rendered
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {

@@ -816,3 +816,29 @@ func TestBlockLambdaLeavesNoBlankLineBehind(t *testing.T) {
 		t.Fatalf("formatted output did not parse: %v\n%s", err, formatted)
 	}
 }
+
+// An annotation that decorates nothing stands as a statement of its own, and the
+// comment that ended its line is written once. It used to be written by both the
+// annotation and the statement around it.
+func TestStandaloneAnnotationWritesItsCommentOnce(t *testing.T) {
+	for _, test := range []struct{ name, source string }{
+		{"decorating a statement", "func f(a):\n\t@warning_ignore(\"x\")  # c\n\tprint(a)\n"},
+		{"on its own line above a declaration", "@export  # why\nvar speed := 1.0\n"},
+		{"ahead of a declaration on its line", "@export var speed := 1.0  # why\n"},
+		{"above a match branch", "func f(v):\n\tmatch v:\n\t\t_:\n\t\t\tpass\n\t\t@warning_ignore(\"x\")  # c\n\t\t1:\n\t\t\tpass\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("annotation.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.source {
+				t.Fatalf("formatted:\n--- got ---\n%s--- want ---\n%s", formatted, test.source)
+			}
+			if strings.Count(formatted, "# c")+strings.Count(formatted, "# why") != 1 {
+				t.Fatalf("the comment was written more than once:\n%s", formatted)
+			}
+		})
+	}
+}
