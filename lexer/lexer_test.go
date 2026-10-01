@@ -407,6 +407,16 @@ func TestLexCommentExcludesACarriageReturn(t *testing.T) {
 			t.Errorf("carriage return at end of file: lexeme = %q, want %q", tok.Lexeme, "# c")
 		}
 	}
+	// A run of carriage returns at the end of a line ends the comment too.
+	run, err := lexer.Lex([]byte("var a = 1  # c\r\r\nvar b = 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range run {
+		if tok.Type == token.Comment && tok.Lexeme != "# c" {
+			t.Errorf("run of carriage returns: lexeme = %q, want %q", tok.Lexeme, "# c")
+		}
+	}
 	// A carriage return that does not end a line stays part of the comment.
 	lone, err := lexer.Lex([]byte("var a = 1  # x\ry\n"))
 	if err != nil {

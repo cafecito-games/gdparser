@@ -283,12 +283,24 @@ func (l *lexer) scanComment(start token.Position) {
 	l.atStart = false
 	begin := l.offset
 	for !l.done() && l.peek() != '\n' {
-		if l.peek() == '\r' && (l.peekN(1) == '\n' || l.offset+1 == len(l.source)) {
-			// A carriage return that ends the line, whether through a CRLF
-			// pair or as the file's last byte, ends the comment rather than
-			// belonging to its text. Emitting it inside the text would carry
-			// it into output whose other lines end with a line feed alone.
-			break
+		if l.peek() == '\r' {
+			// Carriage returns that run to the end of the line end the
+			// comment rather than belonging to its text, whether the line ends
+			// with a line feed or with the file. Emitting them inside the text
+			// would carry them into output whose other lines end with a line
+			// feed alone. The whole run is measured at once so that a comment
+			// holding carriage returns is still scanned in one pass.
+			run := 0
+			for l.peekN(run) == '\r' {
+				run++
+			}
+			if l.offset+run == len(l.source) || l.peekN(run) == '\n' {
+				break
+			}
+			for range run {
+				l.advance()
+			}
+			continue
 		}
 		l.advance()
 	}
