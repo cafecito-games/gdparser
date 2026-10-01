@@ -30,11 +30,20 @@ Add the library to a Go module:
 go get github.com/cafecito-games/gdparser
 ```
 
-Install the CLI:
+Install the CLI from Homebrew:
+
+```sh
+brew install cafecito-games/tap/gdparser
+```
+
+Or from source:
 
 ```sh
 go install github.com/cafecito-games/gdparser/cmd/gdparser@latest
 ```
+
+Prebuilt binaries for macOS, Linux, and Windows are attached to each
+[release](https://github.com/cafecito-games/gdparser/releases).
 
 The project requires Go 1.26 or newer.
 
@@ -156,6 +165,12 @@ gdparser -type uid -format json < player.gd.uid
 ```
 
 The legacy `-format gdscript` spelling remains an alias for `-format source`.
+
+Print the version:
+
+```sh
+gdparser -version
+```
 
 Diagnostics include the filename, line, and column. The CLI exits non-zero for
 invalid input or an unsupported output format.

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cafecito-games/gdparser/internal/version"
 )
 
 func TestRunTreeFromStandardInput(t *testing.T) {
@@ -123,5 +125,16 @@ func TestInferInputType(t *testing.T) {
 		if got := inferInputType(path); got != want {
 			t.Errorf("inferInputType(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	status := run([]string{"-version"}, strings.NewReader(""), &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("status %d: %s", status, stderr.String())
+	}
+	if want := "gdparser " + version.Value + "\n"; stdout.String() != want {
+		t.Fatalf("stdout=%q want %q", stdout.String(), want)
 	}
 }
