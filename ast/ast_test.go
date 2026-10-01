@@ -129,7 +129,6 @@ func TestDumpIncludesCollectionComments(t *testing.T) {
 		t.Fatalf("dump omitted the comment:\n%s", builder.String())
 	}
 }
-
 func TestNamedLambdaIsDumpedAndSerialized(t *testing.T) {
 	file, err := gdparser.ParseString("func a():\n\tvar f = func named(): pass\n")
 	if err != nil {
@@ -169,5 +168,35 @@ func TestAnonymousLambdaOmitsItsName(t *testing.T) {
 		if _, present := lambda[key]; present {
 			t.Errorf("%s should be omitted for an anonymous lambda", key)
 		}
+	}
+}
+
+func TestBindingPatternIsDumpedAndSerialized(t *testing.T) {
+	file, err := gdparser.ParseString("func a(x):\n\tmatch x:\n\t\tvar captured:\n\t\t\tpass\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	if err := ast.Dump(&builder, file); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(builder.String(), "BindingPattern var captured") {
+		t.Fatalf("dump omitted the binding:\n%s", builder.String())
+	}
+	var found bool
+	ast.Inspect(file, func(node ast.Node) bool {
+		if binding, ok := node.(*ast.BindingPattern); ok && binding.Name == "captured" {
+			found = true
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("traversal did not reach the binding")
+	}
+	statement := ast.JSONValue(file).(map[string]any)["statements"].([]any)[0].(map[string]any)
+	match := statement["body"].([]any)[0].(map[string]any)
+	pattern := match["cases"].([]any)[0].(map[string]any)["patterns"].([]any)[0].(map[string]any)
+	if pattern["kind"] != "BindingPattern" || pattern["name"] != "captured" {
+		t.Fatalf("pattern JSON = %#v", pattern)
 	}
 }

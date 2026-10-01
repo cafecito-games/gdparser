@@ -49,6 +49,8 @@ func nodeLabel(node Node) string {
 		if n.Name != "" {
 			return " " + n.Name
 		}
+	case *BindingPattern:
+		return " var " + n.Name
 	case *Literal:
 		return " " + n.Raw
 	case *Comment:

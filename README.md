@@ -172,9 +172,11 @@ corpus, including:
   untyped;
 - `if`/`elif`/`else`, `for`, `while`, `match`, `break`, `continue`, `pass`,
   `return`, and `assert`;
+- `match` patterns, including the wildcard, array and dictionary patterns, and
+  the `var name` binding pattern that `ast.BindingPattern` represents;
 - literals, collections, calls, subscripts, attributes, lambdas (including the
-  named form Godot reports in a stack trace), casts,
-  conditional expressions, `await`, and `preload`;
+  named form Godot reports in a stack trace), casts, conditional expressions,
+  `await`, and `preload`;
 - operators with GDScript precedence and associativity;
 - multiline expressions, escaped identifiers, `$`/`%` node paths, and
   statement continuations;

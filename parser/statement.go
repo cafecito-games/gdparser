@@ -551,7 +551,7 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 		}
 		matchCase := ast.MatchCase{}
 		for {
-			pattern, err := p.parseExpression(0)
+			pattern, err := p.parsePattern()
 			if err != nil {
 				return nil, err
 			}

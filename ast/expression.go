@@ -160,6 +160,20 @@ type TypeExpression struct {
 func (*TypeExpression) node()       {}
 func (*TypeExpression) expression() {}
 
+// BindingPattern is the "var name" pattern of a match branch, which binds the
+// matched value to a new variable. It appears only where a pattern may, which
+// is a branch's pattern list and the elements of an array or dictionary
+// pattern.
+type BindingPattern struct {
+	Base
+	Name        string     `json:"name"`
+	NameSpan    token.Span `json:"name_span,omitempty"`
+	KeywordSpan token.Span `json:"keyword_span,omitempty"`
+}
+
+func (*BindingPattern) node()       {}
+func (*BindingPattern) expression() {}
+
 // LambdaExpression is an anonymous function expression.
 type LambdaExpression struct {
 	Base
