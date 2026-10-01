@@ -110,6 +110,31 @@ func (p *parser) checkAnnotation(annotation *ast.Annotation, allowed annotationT
 	return p.error(name, fmt.Sprintf("the %q annotation is not allowed at this level", "@"+annotation.Name))
 }
 
+// statementStandaloneAnnotations are the standalone annotations a function body
+// may hold. Godot's parse_statement applies the two warning-region markers where
+// it reads them and rejects every other standalone annotation; the export group
+// markers reach a class through add_member_group, which only parse_program and
+// parse_class_body can offer them.
+var statementStandaloneAnnotations = map[string]bool{
+	"warning_ignore_start":   true,
+	"warning_ignore_restore": true,
+}
+
+// checkStatementAnnotation reports whether the annotation may be written among
+// the statements of a function body, which takes a statement's annotations and
+// only the standalone ones a statement can act on.
+func (p *parser) checkStatementAnnotation(annotation *ast.Annotation) error {
+	if err := p.checkAnnotation(annotation, targetStatement|targetStandalone); err != nil {
+		return err
+	}
+	targets := annotationTargets[annotation.Name]
+	if targets&targetStatement != 0 || statementStandaloneAnnotations[annotation.Name] {
+		return nil
+	}
+	return p.error(nameToken(annotation.Name, annotation.NameSpan),
+		fmt.Sprintf("the %q annotation is not allowed inside a function body", "@"+annotation.Name))
+}
+
 // annotationTargetOf returns what kind of declaration statement is, so that the
 // annotations ahead of it can be checked against it.
 func annotationTargetOf(statement ast.Statement) (annotationTarget, bool) {
