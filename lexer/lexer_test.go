@@ -352,3 +352,21 @@ func TestLexLongCommentRunStaysLinear(t *testing.T) {
 		t.Fatalf("got %d tokens, want %d", len(tokens), want)
 	}
 }
+
+func TestLexEllipsis(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a(...rest):\n\tpass\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[3].Type != token.Ellipsis || tokens[3].Lexeme != "..." {
+		t.Fatalf("token 3 = %s %q, want ... \"...\"", tokens[3].Type, tokens[3].Lexeme)
+	}
+	// Two dots are not an ellipsis, so the longest match may not swallow them.
+	pair, err := lexer.Lex([]byte("var x = a..b\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pair[4].Type != token.Dot || pair[5].Type != token.Dot {
+		t.Fatalf("tokens 4 and 5 = %s %s, want . .", pair[4].Type, pair[5].Type)
+	}
+}

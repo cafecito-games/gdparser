@@ -228,7 +228,7 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	if err != nil {
 		return nil, err
 	}
-	parameters, parameterComments, err := p.parseParameters()
+	parameters, parameterComments, err := p.parseParameters(true)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,11 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	}, nil
 }
 
-func (p *parser) parseParameters() ([]ast.Parameter, []ast.CollectionComment, error) {
+// parseParameters parses a parenthesized parameter list. A rest parameter is
+// written "...name" and may only be the last parameter, so variadic reports
+// whether the construct accepts one at all: a function and a lambda do, a
+// signal does not.
+func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.CollectionComment, error) {
 	if _, err := p.expect(token.LParen, "expected '('"); err != nil {
 		return nil, nil, err
 	}
@@ -274,11 +278,23 @@ func (p *parser) parseParameters() ([]ast.Parameter, []ast.CollectionComment, er
 	p.takeCollectionComments(&comments, 0)
 	if !p.at(token.RParen) {
 		for {
+			if len(parameters) > 0 && parameters[len(parameters)-1].Variadic {
+				return nil, nil, p.error(p.peek(), "no parameter may follow a rest parameter")
+			}
+			var rest token.Token
+			if variadic && p.at(token.Ellipsis) {
+				rest = p.advance()
+			}
 			name, err := p.expectName("expected parameter name")
 			if err != nil {
 				return nil, nil, err
 			}
 			parameter := ast.Parameter{Base: base(name.Span), Name: name.Lexeme, NameSpan: name.Span}
+			if rest.Type == token.Ellipsis {
+				parameter.Variadic = true
+				parameter.VariadicSpan = rest.Span
+				parameter.SourceSpan.Start = rest.Span.Start
+			}
 			if p.match(token.Colon) {
 				parameter.Type, parameter.TypeSpan = p.parseTypeUntil(token.Assign, token.InferAssign, token.Comma, token.RParen)
 				if parameter.Type == "" {
@@ -288,6 +304,9 @@ func (p *parser) parseParameters() ([]ast.Parameter, []ast.CollectionComment, er
 			}
 			if p.at(token.Assign, token.InferAssign) {
 				operator := p.advance()
+				if parameter.Variadic {
+					return nil, nil, p.error(operator, "a rest parameter cannot have a default value")
+				}
 				parameter.DefaultOperatorSpan = operator.Span
 				parameter.Default, err = p.parseExpression(0)
 				if err != nil {
@@ -346,7 +365,7 @@ func (p *parser) parseSignal() (ast.Statement, error) {
 	var parameters []ast.Parameter
 	var parameterComments []ast.CollectionComment
 	if p.at(token.LParen) {
-		parameters, parameterComments, err = p.parseParameters()
+		parameters, parameterComments, err = p.parseParameters(false)
 		if err != nil {
 			return nil, err
 		}

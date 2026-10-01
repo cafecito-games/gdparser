@@ -436,6 +436,9 @@ func (p *printer) parameterList(parameters []ast.Parameter, comments []ast.Colle
 
 func (p *printer) parameter(parameter ast.Parameter) doc {
 	header := parameter.Name
+	if parameter.Variadic {
+		header = "..." + header
+	}
 	if parameter.Type != "" {
 		header += ": " + parameter.Type
 	}

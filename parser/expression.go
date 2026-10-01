@@ -216,7 +216,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		}
 		name, nameSpan = named.Lexeme, named.Span
 	}
-	parameters, parameterComments, err := p.parseParameters()
+	parameters, parameterComments, err := p.parseParameters(true)
 	if err != nil {
 		return nil, err
 	}

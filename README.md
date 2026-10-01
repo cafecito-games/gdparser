@@ -170,6 +170,7 @@ corpus, including:
 - classes, annotations, signals, enums, variables, constants, and functions;
 - typed declarations, return types, generics, and accessor blocks, typed or
   untyped;
+- rest parameters, written `...name`, which `ast.Parameter.Variadic` reports;
 - `if`/`elif`/`else`, `for`, `while`, `match`, `break`, `continue`, `pass`,
   `return`, and `assert`;
 - literals, collections, calls, subscripts, attributes, lambdas (including the
