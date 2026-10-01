@@ -41,6 +41,17 @@ func TestVariadicParameter(t *testing.T) {
 			want:   "var f = func(...rest):\n\tpass\n",
 		},
 		{
+			name:   "a comment between the dots and the name",
+			source: "func a(...  # dots\n\t\trest):\n\tpass\n",
+			// The comment ended the opening line, so it stays on that line.
+			want: "func a(  # dots\n\t\t...rest\n):\n\tpass\n",
+		},
+		{
+			name:   "a comment before a rest parameter",
+			source: "func a(first,\n\t\t# note\n\t\t...rest):\n\tpass\n",
+			want:   "func a(\n\t\tfirst,\n\t\t# note\n\t\t...rest\n):\n\tpass\n",
+		},
+		{
 			name:   "a rest parameter beside a default",
 			source: "func a(first = 1, ...rest):\n\tpass\n",
 			want:   "func a(first = 1, ...rest):\n\tpass\n",

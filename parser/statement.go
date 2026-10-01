@@ -284,6 +284,9 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 			var rest token.Token
 			if variadic && p.at(token.Ellipsis) {
 				rest = p.advance()
+				// A comment may sit between the dots and the name, as it may in
+				// every other place a parameter list breaks across lines.
+				p.takeCollectionComments(&comments, len(parameters))
 			}
 			name, err := p.expectName("expected parameter name")
 			if err != nil {
