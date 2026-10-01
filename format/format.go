@@ -142,10 +142,7 @@ func (p *printer) annotation(node *ast.Annotation) doc {
 	// An argument list that holds only comments still has to be written out,
 	// or those comments are lost.
 	if node.Arguments != nil || len(node.Comments) > 0 {
-		arguments := make([]doc, len(node.Arguments))
-		for index, argument := range node.Arguments {
-			arguments[index] = p.expression(argument, 0)
-		}
+		arguments := p.arguments(node.Arguments)
 		document = concat(document, p.collection(argumentLayout, arguments, node.Comments))
 	}
 	if node.TrailingComment != nil {
@@ -354,7 +351,7 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 		}
 		members[index] = text(member.Name)
 	}
-	return concat(text(header+" "), p.collection(enumLayout, members, node.Comments))
+	return concat(text(header+" "), p.collection(enumLayout, plainItems(members), node.Comments))
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {
@@ -394,21 +391,114 @@ var (
 	enumLayout       = layout{open: "{", close: "}", levels: 1, trailingComma: true, padFlat: true}
 )
 
-// holdsAnyLastLine reports whether any item ends in a comment, which holds the
-// rest of its line.
-func holdsAnyLastLine(items []doc) bool {
-	for _, item := range items {
-		if endsWithLineComment(item) {
+// holdsAnyLastLine reports whether any item holds the line it ends on, which
+// leaves no room on that line for the construct's own closing bracket.
+func holdsAnyLastLine(items []item) bool {
+	for _, member := range items {
+		if member.holdsItsLastLine() {
 			return true
 		}
 	}
 	return false
 }
 
+// arguments renders an expression list as collection items.
+func (p *printer) arguments(expressions []ast.Expression) []item {
+	items := make([]item, len(expressions))
+	for index, expression := range expressions {
+		items[index] = item{doc: p.expression(expression, 0), insideMatch: endsInsideMatch(expression)}
+	}
+	return items
+}
+
+// item is one member of a bracketed construct.
+type item struct {
+	doc doc
+	// insideMatch reports that the item's last line lies inside the case list
+	// of a match statement. Godot reads a comma written there as another
+	// pattern, so such an item holds its last line as surely as one ending in
+	// a comment does.
+	insideMatch bool
+}
+
+// plainItems wraps documents that cannot end inside a match statement.
+func plainItems(docs []doc) []item {
+	items := make([]item, len(docs))
+	for index, d := range docs {
+		items[index] = item{doc: d}
+	}
+	return items
+}
+
+// holdsItsLastLine reports whether a comma written straight after it would be
+// read as part of it rather than as the separator after it.
+func (i item) holdsItsLastLine() bool {
+	return endsWithLineComment(i.doc) || i.insideMatch
+}
+
+// endsInsideMatch reports whether the last line expr emits lies inside the case
+// list of a match statement. A lambda reached through an operator or a call is
+// parenthesized, and the parenthesis closes the case list before the item ends,
+// so the lambda written as the item itself is the case this answers. A lambda
+// held by a subscript index is emitted unparenthesized and so ends an item the
+// same way, which #46 covers.
+func endsInsideMatch(expr ast.Expression) bool {
+	lambda, ok := expr.(*ast.LambdaExpression)
+	return ok && !lambda.Inline && statementsEndInsideMatch(lambda.Body)
+}
+
+// statementsEndInsideMatch reports whether the last statement of body leaves a
+// match statement's case list open, directly or through the blocks that end
+// with it.
+func statementsEndInsideMatch(body []ast.Statement) bool {
+	if len(body) == 0 {
+		return false
+	}
+	switch node := body[len(body)-1].(type) {
+	case *ast.MatchStatement:
+		return true
+	case *ast.IfStatement:
+		if len(node.Else) > 0 {
+			return statementsEndInsideMatch(node.Else)
+		}
+		if len(node.Branches) > 0 {
+			return statementsEndInsideMatch(node.Branches[len(node.Branches)-1].Body)
+		}
+	case *ast.ForStatement:
+		return statementsEndInsideMatch(node.Body)
+	case *ast.WhileStatement:
+		return statementsEndInsideMatch(node.Body)
+	case *ast.VariableDeclaration:
+		return node.Value != nil && endsInsideMatch(node.Value)
+	case *ast.Assignment:
+		return endsInsideMatch(node.Value)
+	case *ast.ReturnStatement:
+		return node.Value != nil && endsInsideMatch(node.Value)
+	case *ast.ExpressionStatement:
+		return endsInsideMatch(node.Expression)
+	}
+	return false
+}
+
+// closingComma renders the comma that follows an item holding the line it ends
+// on. Written straight after such an item the comma is read as part of it, and
+// written at the item's own indentation the engine cannot leave the block, so
+// it takes the next line indented with the item's last line.
+//
+// It is written whether or not the construct would otherwise take a trailing
+// comma. Leaving the block means unindenting, and the engine takes that step
+// only to an indentation it already knows: where the construct's bracket
+// follows at a statement's indentation the comma may be dropped, but where the
+// construct is nested inside another the bracket sits at a continuation
+// indentation instead, and only the comma's line supplies the step.
+func closingComma() doc {
+	return nest(1, concat(hardLine, text(",")))
+}
+
 // collection renders items inside brackets, on one line when they fit and one
 // per line otherwise. Comments written between the brackets are anchored to the
 // items they were written against.
-func (p *printer) collection(shape layout, items []doc, comments []ast.CollectionComment) doc {
+func (p *printer) collection(shape layout, items []item, comments []ast.CollectionComment) doc {
 	if len(comments) > 0 {
 		return p.commentedCollection(shape, items, comments)
 	}
@@ -416,29 +506,23 @@ func (p *printer) collection(shape layout, items []doc, comments []ast.Collectio
 		return text(shape.open + shape.close)
 	}
 	var tail doc
-	if shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken {
-		// An optional comma is dropped after an item that ends in a comment,
-		// which would otherwise swallow it, rather than stranded on a line of
-		// its own for the sake of a style preference.
-		if !endsWithLineComment(items[len(items)-1]) {
-			tail = ifBroken(text(","), text(""))
-		}
+	if shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken &&
+		!items[len(items)-1].holdsItsLastLine() {
+		tail = ifBroken(text(","), text(""))
 	}
 	separated := make([]doc, 0, len(items)*3)
-	for index, item := range items {
+	for index, member := range items {
 		if index > 0 {
 			separated = append(separated, spaceLine)
 		}
-		separated = append(separated, item)
-		if index == len(items)-1 {
+		separated = append(separated, member.doc)
+		if member.holdsItsLastLine() {
+			separated = append(separated, closingComma())
 			continue
 		}
-		// A separating comma is required, so an item ending in a comment moves
-		// it onto the next line instead of losing it.
-		if endsWithLineComment(item) {
-			separated = append(separated, hardLine)
+		if index < len(items)-1 {
+			separated = append(separated, text(","))
 		}
-		separated = append(separated, text(","))
 	}
 	pad := doc(text(""))
 	if shape.padFlat {
@@ -464,22 +548,19 @@ func (p *printer) collection(shape layout, items []doc, comments []ast.Collectio
 // commentedCollection renders a bracketed construct that holds comments. Such a
 // construct always breaks, because a comment can only survive on a line of its
 // own or at the end of the line it was written on.
-func (p *printer) commentedCollection(shape layout, items []doc, comments []ast.CollectionComment) doc {
+func (p *printer) commentedCollection(shape layout, items []item, comments []ast.CollectionComment) doc {
 	var lines []doc
-	for index, item := range items {
+	for index, member := range items {
 		for _, comment := range ast.CollectionCommentsAt(comments, index, false) {
 			lines = append(lines, text(p.commentText(comment)))
 		}
-		parts := []doc{item}
+		parts := []doc{member.doc}
 		switch {
+		case member.holdsItsLastLine():
+			parts = append(parts, closingComma())
 		case index < len(items)-1:
-			// A separating comma is required, so an item ending in a comment
-			// moves it onto the next line instead of losing it.
-			if endsWithLineComment(item) {
-				parts = append(parts, hardLine)
-			}
 			parts = append(parts, text(","))
-		case shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken && !endsWithLineComment(item):
+		case shape.trailingComma && p.options.TrailingCommas == TrailingCommasWhenBroken:
 			parts = append(parts, text(","))
 		}
 		// Only one comment fits at the end of a line: a second would be read as
@@ -515,9 +596,12 @@ func (p *printer) commentedCollection(shape layout, items []doc, comments []ast.
 }
 
 func (p *printer) parameterList(parameters []ast.Parameter, comments []ast.CollectionComment) doc {
-	items := make([]doc, len(parameters))
+	items := make([]item, len(parameters))
 	for index, parameter := range parameters {
-		items[index] = p.parameter(parameter)
+		items[index] = item{doc: p.parameter(parameter)}
+		if parameter.Default != nil {
+			items[index].insideMatch = endsInsideMatch(parameter.Default)
+		}
 	}
 	return p.collection(argumentLayout, items, comments)
 }
@@ -638,11 +722,10 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		return inner
 	case *ast.CallExpression:
-		arguments := make([]doc, len(node.Arguments))
-		for index, argument := range node.Arguments {
-			arguments[index] = p.expression(argument, 0)
-		}
-		return concat(p.expression(node.Callee, 12), p.collection(argumentLayout, arguments, node.Comments))
+		return concat(
+			p.expression(node.Callee, 12),
+			p.collection(argumentLayout, p.arguments(node.Arguments), node.Comments),
+		)
 	case *ast.MemberExpression:
 		return closeAfter(p.expression(node.Object, 12), "."+node.Property)
 	case *ast.SubscriptExpression:
@@ -652,22 +735,21 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 			closeAfter(p.expression(node.Index, 0), "]"),
 		)
 	case *ast.ArrayLiteral:
-		elements := make([]doc, len(node.Elements))
-		for index, element := range node.Elements {
-			elements[index] = p.expression(element, 0)
-		}
-		return p.collection(arrayLayout, elements, node.Comments)
+		return p.collection(arrayLayout, p.arguments(node.Elements), node.Comments)
 	case *ast.DictionaryLiteral:
 		separator := ": "
 		if node.LuaStyle {
 			separator = " = "
 		}
-		entries := make([]doc, len(node.Entries))
+		entries := make([]item, len(node.Entries))
 		for index, entry := range node.Entries {
-			entries[index] = concat(
-				closeAfter(p.headerExpression(entry.Key), separator),
-				p.expression(entry.Value, 0),
-			)
+			entries[index] = item{
+				doc: concat(
+					closeAfter(p.headerExpression(entry.Key), separator),
+					p.expression(entry.Value, 0),
+				),
+				insideMatch: endsInsideMatch(entry.Value),
+			}
 		}
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.BindingPattern:
@@ -699,6 +781,12 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 			inner = concat(header, text(":"), p.suite(node.Body))
 		}
 		if parentPrecedence > 0 {
+			if statementsEndInsideMatch(node.Body) {
+				// The closing parenthesis would land in the case list the body
+				// ends inside, where it is read as another pattern, so it takes
+				// the next line, indented with the body it closes.
+				return group(concat(text("("), inner, nest(1, concat(hardLine, text(")")))))
+			}
 			return parenthesized(inner)
 		}
 		return inner

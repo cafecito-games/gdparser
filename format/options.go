@@ -63,7 +63,10 @@ const (
 	// TrailingCommasWhenBroken appends a comma to the last element of an array,
 	// dictionary, or enum that is split over multiple lines.
 	TrailingCommasWhenBroken TrailingCommaStyle = iota
-	// NoTrailingCommas never appends a trailing comma.
+	// NoTrailingCommas never appends a trailing comma, except after an item
+	// that holds the line it ends on, where the comma is what lets the
+	// construct's bracket leave the block rather than a style. See
+	// closingComma for which shapes need it.
 	NoTrailingCommas
 )
 

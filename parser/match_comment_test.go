@@ -61,12 +61,14 @@ func TestMatchComments(t *testing.T) {
 			want:   "func a(x, y):\n\tmatch x:\n\t\t1:\n\t\t\tmatch y:\n\t\t\t\t# inner\n\t\t\t\t2:\n\t\t\t\t\tpass\n",
 		},
 		{
-			// The lambda body continues past the match on purpose: a comma
-			// written straight after a match-terminated body is read as a
-			// pattern, which is #41.
 			name:   "a comment in a match inside a lambda inside a collection",
-			source: "var f = [func(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t\tprint(x)\n]\n",
-			want:   "var f = [\n\tfunc(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t\tprint(x),\n]\n",
+			source: "var f = [func(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n]\n",
+			want:   "var f = [\n\tfunc(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n]\n",
+		},
+		{
+			name:   "a lambda that ends with a match before another element",
+			source: "var f = [func(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t, 2]\n",
+			want:   "var f = [\n\tfunc(x):\n\t\tmatch x:\n\t\t\t# c\n\t\t\t1:\n\t\t\t\tpass\n\t\t,\n\t2,\n]\n",
 		},
 		{
 			name:   "a comment after the last case at the end of the file",
