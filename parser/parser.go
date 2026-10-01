@@ -104,9 +104,13 @@ func (p *parser) pushMultiline(multiline bool) {
 // popMultiline returns to the enclosing construct's answer. A lambda body that
 // ended inside the construct being closed is forgotten with it: the end of a body
 // may stand in for the end of the statement holding it, but only while the
-// expression has not moved on, and a closing bracket moves it on. Godot 4.6.3
-// carries the mark past the bracket, which stops it from reading the "or" in
-// "a.any(func(): return x) or b", source the engine does accept.
+// expression has not moved on, and a closing bracket moves it on.
+//
+// This is a deliberate departure from upstream. Read literally, Godot carries
+// lambda_ended past the closing bracket in 4.6 and 4.7 alike, so the guard in
+// parse_precedence would stop it reading the "or" in
+// "a.any(func(): return x) or b". The engine accepts that source, and widely used
+// add-ons are written that way, so the mark is dropped with the bracket here.
 func (p *parser) popMultiline() {
 	p.multilineStack = p.multilineStack[:len(p.multilineStack)-1]
 	p.lambdaEnded = false
@@ -246,8 +250,14 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 			p.spendLambdaEnd()
 			continue
 		}
-		if p.match(token.Semicolon) {
-			continue
+		if p.at(token.Semicolon) {
+			// A semicolon ends a statement, and Godot's end_statement consumes a
+			// whole run of them, so empty ones in between are not statements.
+			for p.match(token.Semicolon) {
+			}
+			if !p.at(token.Newline, token.Comment) {
+				continue
+			}
 		}
 		if p.at(token.Comment) && p.endsLineOf(stmt) {
 			comment := commentNode(p.advance())

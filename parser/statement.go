@@ -114,7 +114,7 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 			return declaration, nil
 		default:
 			p.advance()
-			declaration.Type, declaration.TypeSpan, err = p.parseTypeUntil(token.Assign, token.InferAssign, token.Colon, token.Newline)
+			declaration.Type, declaration.TypeSpan, err = p.parseType(false, nil, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -359,7 +359,7 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	var returnArrowSpan, returnTypeSpan token.Span
 	if p.at(token.Arrow) {
 		returnArrowSpan = p.advance().Span
-		returnType, returnTypeSpan, err = p.parseTypeUntil(token.Colon, token.Newline)
+		returnType, returnTypeSpan, err = p.parseType(true, nil, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -434,10 +434,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 			}
 			if p.match(token.Colon) {
 				p.takeCollectionComments(&interrupting, 0)
-				parameter.Type, parameter.TypeSpan, err = p.parseTypeInto(
-					&interrupting, 0,
-					token.Assign, token.InferAssign, token.Comma, token.RParen,
-				)
+				parameter.Type, parameter.TypeSpan, err = p.parseType(false, &interrupting, 0)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -493,12 +490,9 @@ func (p *parser) parseClass() (ast.Statement, error) {
 	var extendsSpan, baseTypeSpan token.Span
 	if p.at(token.Extends) {
 		extendsSpan = p.advance().Span
-		extends, baseTypeSpan, err = p.parseTypeUntil(token.Colon)
+		extends, baseTypeSpan, err = p.parseBaseClass()
 		if err != nil {
 			return nil, err
-		}
-		if extends == "" {
-			return nil, p.error(p.peek(), "expected base class")
 		}
 	}
 	body, end, err := p.parseSuite()
@@ -509,6 +503,42 @@ func (p *parser) parseClass() (ast.Statement, error) {
 		Base: spanFrom(start.Span.Start, end), Name: name.Lexeme, NameSpan: name.Span,
 		Extends: extends, BaseTypeSpan: baseTypeSpan, ExtendsSpan: extendsSpan, KeywordSpan: start.Span, Body: body,
 	}, nil
+}
+
+// parseBaseClass reads what follows "extends": a path to a script as a string, a
+// dotted name reaching an inner class, or a string followed by such a name. Godot
+// reads it with parse_extends, which is not the type grammar, so no brackets and
+// no "?" belong here.
+func (p *parser) parseBaseClass() (string, token.Span, error) {
+	var out strings.Builder
+	span := token.Span{Start: p.peek().Span.Start}
+	if p.at(token.String) {
+		path := p.advance()
+		out.WriteString(path.Lexeme)
+		span.End = path.Span.End
+		if !p.at(token.Dot) {
+			return out.String(), span, nil
+		}
+	}
+	for {
+		if out.Len() > 0 {
+			dot, err := p.expect(token.Dot, "expected '.' before an inner class name")
+			if err != nil {
+				return "", token.Span{}, err
+			}
+			out.WriteString(".")
+			span.End = dot.Span.End
+		}
+		name, err := p.expectIdentifier("expected base class")
+		if err != nil {
+			return "", token.Span{}, err
+		}
+		out.WriteString(name.Lexeme)
+		span.End = name.Span.End
+		if !p.at(token.Dot) {
+			return out.String(), span, nil
+		}
+	}
 }
 
 func (p *parser) parseSignal() (ast.Statement, error) {
@@ -660,7 +690,7 @@ func (p *parser) parseFor() (ast.Statement, error) {
 	typeName := ""
 	var typeSpan token.Span
 	if p.match(token.Colon) {
-		typeName, typeSpan, err = p.parseTypeUntil(token.In)
+		typeName, typeSpan, err = p.parseType(false, nil, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -871,71 +901,98 @@ func isAssignment(typ token.Type) bool {
 	}
 }
 
-// parseTypeUntil reads a type that has nowhere to put a comment, so a comment
-// always ends it.
-func (p *parser) parseTypeUntil(stops ...token.Type) (string, token.Span, error) {
-	return p.parseTypeInto(nil, 0, stops...)
+// parseType reads a type and returns its canonical spelling, or an empty string
+// when no type is written here, which lets each caller name what it expected
+// instead. The grammar is parse_type in Godot's
+// modules/gdscript/gdscript_parser.cpp:
+//
+//	type := "void" | NAME ( "[" types "]" | ("." NAME)* )
+//
+// allowVoid permits "void", which names only the absence of a return value. A
+// comment may interrupt the type after one of its dots, where the name goes on
+// afterwards; comments then holds it, anchored to the item at index. Godot allows
+// no line break inside a type's brackets, so neither does this. Brackets and a
+// dotted name are alternatives, which is why "Base.Generic[int]" is not a type.
+func (p *parser) parseType(allowVoid bool, comments *[]ast.CollectionComment, index int) (string, token.Span, error) {
+	var out strings.Builder
+	span := token.Span{Start: p.peek().Span.Start}
+	write := func(tok token.Token, text string) {
+		out.WriteString(text)
+		span.End = tok.Span.End
+	}
+	if p.at(token.Void) {
+		if !allowVoid {
+			return "", token.Span{}, p.error(p.peek(), "'void' only names a function's return type")
+		}
+		write(p.advance(), "void")
+		return out.String(), span, nil
+	}
+	if !token.IsIdentifier(p.peek().Type) {
+		return "", token.Span{}, nil
+	}
+	first := p.advance()
+	write(first, first.Lexeme)
+	if p.at(token.LBracket) {
+		bracket := p.advance()
+		write(bracket, "[")
+		if _, err := p.parseTypeList(&out, comments, index); err != nil {
+			return "", token.Span{}, err
+		}
+		closing, err := p.expect(token.RBracket, "expected ']' after the collection's type arguments")
+		if err != nil {
+			return "", token.Span{}, err
+		}
+		write(closing, "]")
+		return out.String(), span, nil
+	}
+	// A dotted name reaches an inner class or an enum of the outer one. Brackets
+	// and a dotted name are alternatives, as they are for Godot.
+	for p.at(token.Dot) {
+		dot := p.advance()
+		write(dot, ".")
+		if comments != nil {
+			// The name goes on after the comment, so the comment interrupts the
+			// type rather than ending it.
+			p.takeCollectionComments(comments, index)
+		}
+		part, err := p.expectIdentifier("expected a type name after '.'")
+		if err != nil {
+			return "", token.Span{}, err
+		}
+		write(part, part.Lexeme)
+	}
+	return out.String(), span, nil
 }
 
-// parseTypeInto reads a type, stopping before the first of stops it finds
-// outside the type's brackets. A comment ends the type, so that it stays a
-// comment rather than being read as more type text, except that a type broken
-// after one of its dots continues past the comment: comments then holds it,
-// anchored to the item at index. Inside the type's brackets, where the rest of
-// the type would follow the comment onto the next line, a comment is an error,
-// as it is for Godot.
-func (p *parser) parseTypeInto(comments *[]ast.CollectionComment, index int, stops ...token.Type) (string, token.Span, error) {
-	stop := make(map[token.Type]bool, len(stops))
-	for _, typ := range stops {
-		stop[typ] = true
+// parseTypeList reads the comma-separated types inside a type's brackets,
+// appending each to out and returning the end of the last one.
+func (p *parser) parseTypeList(out *strings.Builder, comments *[]ast.CollectionComment, index int) (token.Position, error) {
+	var end token.Position
+	for {
+		if p.at(token.Comment, token.Newline) {
+			// Godot keeps line breaks meaningful inside a type's brackets, so the
+			// rest of the type cannot be carried onto the next line.
+			return end, p.error(p.peek(), "a type argument list is written on one line")
+		}
+		argument, span, err := p.parseType(false, comments, index)
+		if err != nil {
+			return end, err
+		}
+		if argument == "" {
+			return end, p.error(p.peek(), "expected a type argument")
+		}
+		out.WriteString(argument)
+		end = span.End
+		if !p.at(token.Comma) {
+			return end, nil
+		}
+		comma := p.advance()
+		if p.at(token.RBracket) {
+			// A trailing comma ends the list, and leaves no comma to write.
+			return comma.Span.End, nil
+		}
+		out.WriteString(", ")
 	}
-	var out strings.Builder
-	var sourceSpan token.Span
-	depth := 0
-	for !p.at(token.EOF) {
-		tok := p.peek()
-		if tok.Type == token.Comment {
-			if depth > 0 {
-				return "", token.Span{}, p.error(tok, "a type argument list is written on one line")
-			}
-			if comments != nil && strings.HasSuffix(out.String(), ".") {
-				// The name continues after the dot, so the comment interrupts
-				// the type rather than ending it.
-				p.takeCollectionComments(comments, index)
-				continue
-			}
-			break
-		}
-		if depth == 0 && stop[tok.Type] {
-			break
-		}
-		if token.IsKeyword(tok.Type) && !token.IsIdentifier(tok.Type) && tok.Type != token.Void {
-			// A type is built from names, dots, brackets and commas, so a
-			// reserved keyword here is not a type Godot would accept. The one
-			// exception is "void", which names the absence of a return value.
-			return "", token.Span{}, p.error(tok, "expected type name")
-		}
-		switch tok.Type {
-		case token.LBracket:
-			depth++
-		case token.RBracket:
-			if depth == 0 {
-				return out.String(), sourceSpan, nil
-			}
-			depth--
-		}
-		p.advance()
-		if sourceSpan == (token.Span{}) {
-			sourceSpan.Start = tok.Span.Start
-		}
-		sourceSpan.End = tok.Span.End
-		if tok.Type == token.Comma {
-			out.WriteString(", ")
-		} else {
-			out.WriteString(tok.Lexeme)
-		}
-	}
-	return out.String(), sourceSpan, nil
 }
 
 func componentEnd(body []ast.Statement, fallback token.Position) token.Position {

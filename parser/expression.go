@@ -322,7 +322,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	var returnArrowSpan, returnTypeSpan token.Span
 	if p.at(token.Arrow) {
 		returnArrowSpan = p.advance().Span
-		returnType, returnTypeSpan, err = p.parseTypeUntil(token.Colon)
+		returnType, returnTypeSpan, err = p.parseType(true, nil, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -359,40 +359,18 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	}, nil
 }
 
+// parseTypeExpression reads the type that "as" or "is" tests against, which is
+// the same grammar a declaration's type uses, minus "void".
 func (p *parser) parseTypeExpression() (ast.Expression, error) {
 	start := p.peek()
-	if !token.IsIdentifier(start.Type) {
+	name, span, err := p.parseType(false, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	if name == "" {
 		return nil, p.error(start, "expected type name")
 	}
-	var name strings.Builder
-	name.WriteString(p.advance().Lexeme)
-	for p.match(token.Dot) {
-		part, err := p.expectIdentifier("expected type name after '.'")
-		if err != nil {
-			return nil, err
-		}
-		name.WriteByte('.')
-		name.WriteString(part.Lexeme)
-	}
-	if p.match(token.LBracket) {
-		name.WriteByte('[')
-		for {
-			argument, err := p.parseTypeExpression()
-			if err != nil {
-				return nil, err
-			}
-			name.WriteString(argument.(*ast.TypeExpression).Name)
-			if !p.match(token.Comma) {
-				break
-			}
-			name.WriteString(", ")
-		}
-		if _, err := p.expect(token.RBracket, "expected ']' after type arguments"); err != nil {
-			return nil, err
-		}
-		name.WriteByte(']')
-	}
-	return &ast.TypeExpression{Base: spanFrom(start.Span.Start, p.previous().Span.End), Name: name.String()}, nil
+	return &ast.TypeExpression{Base: base(span), Name: name}, nil
 }
 
 func (p *parser) parseArray(start token.Token) (ast.Expression, error) {

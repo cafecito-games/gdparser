@@ -22,7 +22,7 @@ static var value: Array[Dictionary[String, int]] = source.member:
 		value = next_value
 static func transform(input: Dictionary[String, Array[int]] = defaults) -> Array[Vector2]:
 	var callback = func(item: Array[int] = defaults) -> Dictionary[String, int]: return item
-class Inner extends Base.Generic[Thing]:
+class Inner extends Base.Generic:
 	signal changed(payload: int)
 `)
 	file := parseSpans(t, source)
@@ -77,7 +77,7 @@ class Inner extends Base.Generic[Thing]:
 	assertSpan(t, source, class.KeywordSpan, "class")
 	assertSpan(t, source, class.NameSpan, "Inner")
 	assertSpan(t, source, class.ExtendsSpan, "extends")
-	assertSpan(t, source, class.BaseTypeSpan, "Base.Generic[Thing]")
+	assertSpan(t, source, class.BaseTypeSpan, "Base.Generic")
 	signal := class.Body[0].(*ast.SignalDeclaration)
 	assertSpan(t, source, signal.KeywordSpan, "signal")
 	assertSpan(t, source, signal.NameSpan, "changed")
