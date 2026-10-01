@@ -119,6 +119,8 @@ func TestNameReusedWhereGodotAllowsIt(t *testing.T) {
 		"func outer(x):\n\tvar callback = func(x): return x\n\treturn callback\n",
 		// or of a local,
 		"func outer():\n\tvar x = 1\n\tvar callback = func(x): return x\n\treturn callback.call(x)\n",
+		// or of a loop variable,
+		"func outer():\n\tfor i in 2:\n\t\tvar g = func(i): return i\n\t\tprint(g)\n",
 		// or of a parameter of the lambda around it.
 		"func outer():\n\tvar g = func(x): return func(x): return x\n\treturn g\n",
 	} {

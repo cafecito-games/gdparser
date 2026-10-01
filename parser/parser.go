@@ -595,9 +595,11 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 		if p.inLambda && !p.at(token.Newline, token.Semicolon, token.EOF, token.Dedent) {
 			p.lambdaEnded = true
 		}
-		end := stmt.Span().End
-		if len(body) > 0 {
-			end = body[len(body)-1].Span().End
+		// The block ends where its line does, which is at the header's comment
+		// when one was written, though that comment leads the body.
+		end := body[len(body)-1].Span().End
+		if comment, ok := body[0].(*ast.Comment); ok && comment.TrailsHeader {
+			end = comment.Span().End
 		}
 		return body, end, nil
 	}

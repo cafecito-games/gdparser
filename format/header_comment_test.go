@@ -57,6 +57,11 @@ func TestHeaderCommentStaysOnTheHeaderLine(t *testing.T) {
 			"func g(x):\n\tif x:  # c\n\t\tpass\n",
 		},
 		{
+			"a one-line match arm",
+			"func g(x):\n\tmatch x:\n\t\t1: pass  # c\n",
+			"func g(x):\n\tmatch x:\n\t\t1:  # c\n\t\t\tpass\n",
+		},
+		{
 			"a one-line block of several statements",
 			"func g(x):\n\tif x: print(1); print(2)  # c\n",
 			"func g(x):\n\tif x:  # c\n\t\tprint(1)\n\t\tprint(2)\n",
@@ -130,6 +135,20 @@ func TestHeaderCommentIsMarkedInTheTree(t *testing.T) {
 	comment := ast.JSONValue(header).(map[string]any)
 	if comment["trails_header"] != true {
 		t.Fatalf("JSON does not mark the header's comment: %#v", comment)
+	}
+}
+
+// A one-line block ends where its line does, so the statement holding it still
+// covers the comment that ended the line.
+func TestOneLineBlockSpanCoversItsComment(t *testing.T) {
+	source := "func g(x):\n\tif x: pass  # c\n"
+	file, err := parser.Parse("header.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := file.Statements[0].(*ast.FunctionDeclaration).Body[0]
+	if got, want := statement.Span().End.Offset, len(source)-1; got != want {
+		t.Fatalf("the if statement ends at offset %d, want %d", got, want)
 	}
 }
 
