@@ -195,6 +195,21 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 	if err != nil {
 		return nil, err
 	}
+	if p.lambdaEnded && len(p.scopes) == 0 && p.at(token.Newline) {
+		// A one-line lambda body takes the line break that ends it: Godot's
+		// end_statement consumes every break it finds while still inside the
+		// lambda. A property initialized with one so finds the colon of its
+		// accessor block on a later line, where no other value lets it stand.
+		offset := 0
+		for p.peekN(offset).Type == token.Newline {
+			offset++
+		}
+		if p.peekN(offset).Type == token.Colon {
+			for range offset {
+				p.advance()
+			}
+		}
+	}
 	hasAccessors := false
 	if p.at(token.Colon) {
 		if err := p.parseAccessors(declaration, p.accessorBlockFollows()); err != nil {
