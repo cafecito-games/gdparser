@@ -224,7 +224,10 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	var returnArrowSpan, returnTypeSpan token.Span
 	if p.at(token.Arrow) {
 		returnArrowSpan = p.advance().Span
-		returnType, returnTypeSpan = p.parseTypeUntil(token.Colon)
+		returnType, returnTypeSpan, err = p.parseTypeUntil(token.Colon)
+		if err != nil {
+			return nil, err
+		}
 		if returnType == "" {
 			return nil, p.error(p.peek(), "expected lambda return type")
 		}

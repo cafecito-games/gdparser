@@ -101,7 +101,10 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 	// introducing a type, which is how an untyped property is written.
 	if p.at(token.Colon) && !p.accessorBlockFollows() {
 		p.advance()
-		declaration.Type, declaration.TypeSpan = p.parseTypeUntil(token.Assign, token.InferAssign, token.Colon, token.Newline, token.Comment)
+		declaration.Type, declaration.TypeSpan, err = p.parseTypeUntil(token.Assign, token.InferAssign, token.Colon, token.Newline)
+		if err != nil {
+			return nil, err
+		}
 		if declaration.Type == "" {
 			return nil, p.error(p.peek(), "expected type after ':'")
 		}
@@ -265,7 +268,10 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	var returnArrowSpan, returnTypeSpan token.Span
 	if p.at(token.Arrow) {
 		returnArrowSpan = p.advance().Span
-		returnType, returnTypeSpan = p.parseTypeUntil(token.Colon, token.Newline, token.Comment)
+		returnType, returnTypeSpan, err = p.parseTypeUntil(token.Colon, token.Newline)
+		if err != nil {
+			return nil, err
+		}
 		if returnType == "" {
 			return nil, p.error(p.peek(), "expected return type after '->'")
 		}
@@ -328,7 +334,10 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 				parameter.SourceSpan.Start = rest.Span.Start
 			}
 			if p.match(token.Colon) {
-				parameter.Type, parameter.TypeSpan = p.parseTypeUntil(token.Assign, token.InferAssign, token.Comma, token.RParen)
+				parameter.Type, parameter.TypeSpan, err = p.parseTypeUntil(token.Assign, token.InferAssign, token.Comma, token.RParen)
+				if err != nil {
+					return nil, nil, err
+				}
 				if parameter.Type == "" {
 					return nil, nil, p.error(p.peek(), "expected parameter type")
 				}
@@ -373,7 +382,10 @@ func (p *parser) parseClass() (ast.Statement, error) {
 	var extendsSpan, baseTypeSpan token.Span
 	if p.at(token.Extends) {
 		extendsSpan = p.advance().Span
-		extends, baseTypeSpan = p.parseTypeUntil(token.Colon)
+		extends, baseTypeSpan, err = p.parseTypeUntil(token.Colon)
+		if err != nil {
+			return nil, err
+		}
 		if extends == "" {
 			return nil, p.error(p.peek(), "expected base class")
 		}
@@ -533,7 +545,10 @@ func (p *parser) parseFor() (ast.Statement, error) {
 	typeName := ""
 	var typeSpan token.Span
 	if p.match(token.Colon) {
-		typeName, typeSpan = p.parseTypeUntil(token.In)
+		typeName, typeSpan, err = p.parseTypeUntil(token.In)
+		if err != nil {
+			return nil, err
+		}
 		if typeName == "" {
 			return nil, p.error(p.peek(), "expected loop variable type")
 		}
@@ -701,7 +716,12 @@ func isAssignment(typ token.Type) bool {
 	}
 }
 
-func (p *parser) parseTypeUntil(stops ...token.Type) (string, token.Span) {
+// parseTypeUntil reads a type, stopping before the first of stops it finds
+// outside the type's brackets. A comment always ends the type, so that it stays
+// a comment rather than being read as more type text; inside the brackets,
+// where the rest of the type would follow the comment onto the next line, it is
+// an error, as it is for Godot.
+func (p *parser) parseTypeUntil(stops ...token.Type) (string, token.Span, error) {
 	stop := make(map[token.Type]bool, len(stops))
 	for _, typ := range stops {
 		stop[typ] = true
@@ -711,6 +731,12 @@ func (p *parser) parseTypeUntil(stops ...token.Type) (string, token.Span) {
 	depth := 0
 	for !p.at(token.EOF) {
 		tok := p.peek()
+		if tok.Type == token.Comment {
+			if depth > 0 {
+				return "", token.Span{}, p.error(tok, "a type argument list is written on one line")
+			}
+			break
+		}
 		if depth == 0 && stop[tok.Type] {
 			break
 		}
@@ -719,7 +745,7 @@ func (p *parser) parseTypeUntil(stops ...token.Type) (string, token.Span) {
 			depth++
 		case token.RBracket:
 			if depth == 0 {
-				return out.String(), sourceSpan
+				return out.String(), sourceSpan, nil
 			}
 			depth--
 		}
@@ -734,7 +760,7 @@ func (p *parser) parseTypeUntil(stops ...token.Type) (string, token.Span) {
 			out.WriteString(tok.Lexeme)
 		}
 	}
-	return out.String(), sourceSpan
+	return out.String(), sourceSpan, nil
 }
 
 func componentEnd(body []ast.Statement, fallback token.Position) token.Position {
