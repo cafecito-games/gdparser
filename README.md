@@ -187,8 +187,8 @@ corpus, including:
 - the keywords Godot still accepts as names. `match` and `tool` are contextual,
   so they may name anything a declaration binds; every keyword but a literal may
   name a member after a dot; and an annotation name after `@` may be any keyword
-  at all. A reserved keyword elsewhere is a positioned error, as it is for
-  Godot.
+  at all. A reserved keyword where a name is declared, bound or used as a type
+  is a positioned error, as it is for Godot.
 
 ### Text scenes and resources
 
