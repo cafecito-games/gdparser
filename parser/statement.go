@@ -195,12 +195,39 @@ func (p *parser) parseVariableAfter(keyword, static token.Token, constant bool) 
 	if err != nil {
 		return nil, err
 	}
+	var skipped []ast.CollectionComment
+	if !constant && len(p.scopes) == 0 && p.lambdaEnded && endsInLambda(declaration.Value) {
+		// A lambda body takes the line break that ends it: Godot's end_statement
+		// consumes every break and semicolon it finds while still inside the
+		// lambda, and comments are no tokens to it. A property whose initializer
+		// ends in a lambda so finds the colon of its accessor block on a later
+		// line, where no other value lets it stand. Only "var" reads accessors,
+		// and only the lambda that ends the value leaves the mark in place.
+		offset := 0
+		for p.peekN(offset).Type == token.Newline || p.peekN(offset).Type == token.Semicolon ||
+			p.peekN(offset).Type == token.Comment {
+			offset++
+		}
+		if p.peekN(offset).Type == token.Colon {
+			for range offset {
+				if tok := p.advance(); tok.Type == token.Comment {
+					skipped = append(skipped, ast.CollectionComment{Comment: commentNode(tok)})
+				}
+			}
+		}
+	}
 	hasAccessors := false
 	if p.at(token.Colon) {
 		if err := p.parseAccessors(declaration, p.accessorBlockFollows()); err != nil {
 			return nil, err
 		}
 		hasAccessors = true
+		if len(skipped) > 0 {
+			// A comment passed on the way to the colon is kept with the
+			// accessors, which only a block has room for.
+			declaration.AccessorBlock = true
+			declaration.AccessorComments = append(skipped, declaration.AccessorComments...)
+		}
 	}
 	if hasAccessors {
 		// parsePropertyAccessors extends the declaration through the accessor block.

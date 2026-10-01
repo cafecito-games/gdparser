@@ -283,8 +283,14 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 				// as a statement of its own rather than waiting for one. Godot
 				// handles these where it reads them, for the same reason.
 				annotation.BlankLinesBefore = blankLines
-				annotation.OwnLine = true
 				statements = append(statements, annotation)
+				if sharesItsLine(annotation.Name) && !p.at(token.Newline, token.Comment, token.EOF) {
+					// An annotation of the script itself may be followed on its
+					// line by what comes next, such as "extends". Godot asks for
+					// a line break only after a standalone annotation.
+					continue
+				}
+				annotation.OwnLine = true
 				if p.at(token.Comment) {
 					annotation.TrailingComment = commentNode(p.advance())
 				}
@@ -544,16 +550,23 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 		headerComments = append(headerComments, comment)
 	}
 	p.strayComments = nil
-	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
+	colon, err := p.expect(token.Colon, "expected ':' before block")
+	if err != nil {
 		return nil, token.Position{}, err
 	}
 	// The colon's line may end with a comment, which is marked as the header's
 	// own and leads the block so that formatting can put it back on that line.
 	// The comments held back from the header's continuation lines, which have
 	// nowhere to sit inside the header, open the block after it, since that is
-	// the nearest scope the statement owns.
-	if p.at(token.Comment) {
-		headerComments = append([]ast.Statement{headerComment(p.advance())}, headerComments...)
+	// the nearest scope the statement owns. A comment written on a line the
+	// header continues over with a backslash is only scanned here, after the
+	// colon, so the line a comment stands on is what tells the two apart.
+	for p.at(token.Comment) {
+		if p.peek().Span.Start.Line == colon.Span.End.Line {
+			headerComments = append([]ast.Statement{headerComment(p.advance())}, headerComments...)
+			continue
+		}
+		headerComments = append(headerComments, commentNode(p.advance()))
 	}
 	if !p.at(token.Newline) {
 		if forLambda && !beginsStatement(p.peek().Type) {
@@ -562,43 +575,85 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			// leaving what follows to the expression the lambda sits in.
 			return headerComments, p.previous().Span.End, nil
 		}
+		if p.at(token.At) {
+			if forLambda {
+				return nil, token.Position{}, p.error(p.peek(), "a lambda's body cannot begin with an annotation")
+			}
+			// An annotation is no statement of the block it is written in: Godot
+			// holds it for the next declaration and ends a one-line block at
+			// once, so the block is empty and the annotation, with what it
+			// decorates, belongs to the scope around it.
+			return headerComments, colon.Span.End, nil
+		}
+		if classBody && p.at(token.Static) {
+			// "static" alone is the one member a one-line class reads, and Godot
+			// forgets it when the class ends, so the declaration after it is a
+			// plain one of the scope around the class.
+			static := p.advance()
+			if !p.at(token.Func, token.Var) {
+				return nil, token.Position{}, p.error(p.peek(), "expected func or var after static")
+			}
+			return headerComments, static.Span.End, nil
+		}
 		stmt, _, err := p.parseStatement()
 		if err != nil {
 			return nil, token.Position{}, err
 		}
-		body := append([]ast.Statement{}, headerComments...)
-		body = append(body, stmt)
-		for p.match(token.Semicolon) {
-			if p.at(token.Newline, token.Comment) {
-				break
+		statements := []ast.Statement{stmt}
+		if classBody {
+			// A class written on one line holds one member: Godot's
+			// parse_class_body stops after the first when the body is not a
+			// block, and what a semicolon separates from it belongs to the scope
+			// around the class. The semicolons themselves end the member.
+			for p.match(token.Semicolon) {
 			}
-			next, _, nextErr := p.parseStatement()
-			if nextErr != nil {
-				return nil, token.Position{}, nextErr
+		} else {
+			for p.match(token.Semicolon) {
+				if p.at(token.Newline, token.Comment) {
+					break
+				}
+				next, _, nextErr := p.parseStatement()
+				if nextErr != nil {
+					return nil, token.Position{}, nextErr
+				}
+				statements = append(statements, next)
 			}
-			body = append(body, next)
 		}
-		if p.at(token.Comment) {
-			if forLambda {
+		// The block ends where its line does.
+		end := statements[len(statements)-1].Span().End
+		// The comments of the header's continuation lines are scanned here when
+		// the body shares the header's line, after the body rather than after
+		// the colon.
+		var trailing, continuation []ast.Statement
+		for p.at(token.Comment) {
+			switch {
+			case forLambda:
 				// A lambda's one-line body stays on its line, so the comment
 				// still ends it.
-				body = append(body, commentNode(p.advance()))
-			} else {
+				comment := commentNode(p.advance())
+				statements = append(statements, comment)
+				end = comment.Span().End
+			case p.peek().Span.Start.Line == colon.Span.End.Line:
 				// Any other one-line body moves to a line of its own, and the
-				// comment stays on the line it was written on, the header's.
-				body = append([]ast.Statement{headerComment(p.advance())}, body...)
+				// comment stays on the line it was written on, the header's,
+				// though it leads the body.
+				comment := headerComment(p.advance())
+				trailing = append(trailing, comment)
+				end = comment.Span().End
+			default:
+				comment := commentNode(p.advance())
+				continuation = append(continuation, comment)
+				if comment.Span().End.Offset > end.Offset {
+					end = comment.Span().End
+				}
 			}
 		}
 		if p.inLambda && !p.at(token.Newline, token.Semicolon, token.EOF, token.Dedent) {
 			p.lambdaEnded = true
 		}
-		// The block ends where its line does, which is at the header's comment
-		// when one was written, though that comment leads the body.
-		end := body[len(body)-1].Span().End
-		if comment, ok := body[0].(*ast.Comment); ok && comment.TrailsHeader {
-			end = comment.Span().End
-		}
-		return body, end, nil
+		body := append(trailing, headerComments...)
+		body = append(body, continuation...)
+		return append(body, statements...), end, nil
 	}
 	if _, err := p.expect(token.Newline, "expected newline before block"); err != nil {
 		return nil, token.Position{}, err
