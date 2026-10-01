@@ -223,11 +223,11 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 		if len(p.pendingAnnotations) == 0 {
 			return
 		}
+		left, leftBlankLines := p.takePendingAnnotations()
 		if len(pending) == 0 {
-			pendingBlankLines = p.pendingBlankLines
+			pendingBlankLines = leftBlankLines
 		}
-		pending = append(pending, p.pendingAnnotations...)
-		p.pendingAnnotations = nil
+		pending = append(pending, left...)
 	}
 	// flush emits annotations that decorate no declaration as plain statements.
 	flush := func() {
@@ -431,6 +431,36 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 	}
 	flush()
 	return statements, nil
+}
+
+// takePendingAnnotations returns the annotations a block left waiting, with the
+// blank lines written before the first of them, and clears both.
+func (p *parser) takePendingAnnotations() ([]*ast.Annotation, int) {
+	pending, blankLines := p.pendingAnnotations, p.pendingBlankLines
+	p.pendingAnnotations, p.pendingBlankLines = nil, 0
+	return pending, blankLines
+}
+
+// giveAnnotationsTo binds to statement the annotations written before it and
+// returns the ones that stand in the list ahead of it instead, because the
+// statement is no declaration and so carries none. Godot gives them to any
+// statement; a tree that holds them only on declarations keeps the rest where
+// they were written.
+func (p *parser) giveAnnotationsTo(statement ast.Statement, annotations []*ast.Annotation) ([]ast.Statement, error) {
+	if len(annotations) == 0 {
+		return nil, nil
+	}
+	if err := p.checkAnnotationTargets(statement, annotations); err != nil {
+		return nil, err
+	}
+	if attachAnnotations(statement, annotations) {
+		return nil, nil
+	}
+	leading := make([]ast.Statement, 0, len(annotations))
+	for _, annotation := range annotations {
+		leading = append(leading, annotation)
+	}
+	return leading, nil
 }
 
 // leavePendingAnnotations hands the annotations a block ends with to the list
@@ -647,11 +677,20 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			}
 			return headerComments, static.Span.End, nil
 		}
+		// A block read before this one may have left annotations waiting, and
+		// the first statement of this body is the next one they can decorate.
+		// They are taken before it is read, as Godot's parse_statement pops them
+		// before reading the statement they belong to.
+		left, _ := p.takePendingAnnotations()
 		stmt, _, err := p.parseStatement(classBody)
 		if err != nil {
 			return nil, token.Position{}, err
 		}
-		statements := []ast.Statement{stmt}
+		leading, err := p.giveAnnotationsTo(stmt, left)
+		if err != nil {
+			return nil, token.Position{}, err
+		}
+		statements := append(leading, stmt)
 		if classBody {
 			// A class written on one line holds one member: Godot's
 			// parse_class_body stops after the first when the body is not a

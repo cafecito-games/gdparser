@@ -69,6 +69,10 @@ func TestAnnotationDecoratingTheStatementAfterItsBlock(t *testing.T) {
 			source: "func f(x):\n\tif x: @warning_ignore(\"unused_variable\")\nfunc g():\n\tpass\n",
 			want:   "func f(x):\n\tif x:\n\t\tpass\n\n\n@warning_ignore(\"unused_variable\")\nfunc g():\n\tpass\n",
 		},
+		{
+			source: "class Inner:\n\tvar a = 1\n\t@warning_ignore(\"unused_variable\")\nclass Other: var b = 2\n",
+			want:   "class Inner:\n\tvar a = 1\n\n\n@warning_ignore(\"unused_variable\")\nclass Other:\n\tvar b = 2\n",
+		},
 	} {
 		file, err := parser.Parse("leak.gd", []byte(test.source))
 		if err != nil {
@@ -107,5 +111,81 @@ func TestAnnotationEndingAnOpenScriptHead(t *testing.T) {
 	}
 	if formatted := gdformat.File(file); formatted != source {
 		t.Errorf("formatted output changed the source: %q", formatted)
+	}
+}
+
+// A body written on the line of its header is the next place an annotation left
+// waiting by the block before it can land, which is where Godot's parse_suite
+// reads the statement that pops it off the annotation stack. The else, elif and
+// match branches that follow a block are all written this way.
+func TestAnnotationDecoratingAOneLineBody(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		want   string
+	}{
+		{
+			source: "func f(a):\n\tif a:\n\t\t@warning_ignore(\"unused_variable\")\n\telse: var q = 1\n",
+			want:   "func f(a):\n\tif a:\n\t\tpass\n\telse:\n\t\t@warning_ignore(\"unused_variable\")\n\t\tvar q = 1\n",
+		},
+		{
+			source: "func f(a, b):\n\tif a:\n\t\t@warning_ignore(\"unused_variable\")\n\telif b: var q = 1\n",
+			want:   "func f(a, b):\n\tif a:\n\t\tpass\n\telif b:\n\t\t@warning_ignore(\"unused_variable\")\n\t\tvar q = 1\n",
+		},
+		{
+			source: "func f(a):\n\tmatch a:\n\t\t1:\n\t\t\t@warning_ignore(\"unused_variable\")\n\t\t2: var q = 1\n",
+			want:   "func f(a):\n\tmatch a:\n\t\t1:\n\t\t\tpass\n\t\t2:\n\t\t\t@warning_ignore(\"unused_variable\")\n\t\t\tvar q = 1\n",
+		},
+		{
+			source: "func f(a):\n\tif a:\n\t\t@warning_ignore(\"unused_variable\")\n\telse: var q = 1; var w = 2\n",
+			want:   "func f(a):\n\tif a:\n\t\tpass\n\telse:\n\t\t@warning_ignore(\"unused_variable\")\n\t\tvar q = 1\n\t\tvar w = 2\n",
+		},
+		{
+			source: "func f(a):\n\tif a:\n\t\t@warning_ignore(\"unused_variable\")\n\telse: print(1)\n",
+			want:   "func f(a):\n\tif a:\n\t\tpass\n\telse:\n\t\t@warning_ignore(\"unused_variable\")\n\t\tprint(1)\n",
+		},
+	} {
+		file, err := parser.Parse("oneline.gd", []byte(test.source))
+		if err != nil {
+			t.Errorf("parse %q: %v", test.source, err)
+			continue
+		}
+		formatted := gdformat.File(file)
+		if formatted != test.want {
+			t.Errorf("formatted %q as %q, want %q", test.source, formatted, test.want)
+		}
+		again, err := parser.Parse("oneline.gd", []byte(formatted))
+		if err != nil {
+			t.Errorf("formatted %q did not parse: %v", formatted, err)
+			continue
+		}
+		if second := gdformat.File(again); second != formatted {
+			t.Errorf("formatting %q is not idempotent: %q", test.source, second)
+		}
+	}
+}
+
+// The annotation goes to the statement that follows it, which is the one the
+// body on the header's line holds, not the statement after the whole block.
+func TestAnnotationLandsInTheBranchThatFollowsIt(t *testing.T) {
+	source := "func f(a):\n\tif a:\n\t\t@warning_ignore(\"unused_variable\")\n\telse: var q = 1\n\tvar r = 2\n"
+	file, err := parser.Parse("branch.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := file.Statements[0].(*ast.FunctionDeclaration).Body
+	statement := body[0].(*ast.IfStatement)
+	inBranch, ok := statement.Else[0].(*ast.VariableDeclaration)
+	if !ok {
+		t.Fatalf("the else branch opens with %T, want a variable declaration", statement.Else[0])
+	}
+	if len(inBranch.Annotations) != 1 {
+		t.Fatalf("%q carries %d annotations, want 1", inBranch.Name, len(inBranch.Annotations))
+	}
+	after, ok := body[1].(*ast.VariableDeclaration)
+	if !ok {
+		t.Fatalf("the statement after the branch is %T, want a variable declaration", body[1])
+	}
+	if len(after.Annotations) != 0 {
+		t.Errorf("%q picked up %d annotations", after.Name, len(after.Annotations))
 	}
 }
