@@ -9,8 +9,8 @@ import (
 )
 
 // A comma at the bracket depth of a multiline lambda body ends that body, but
-// not when it separates the parts of a line that opens a block: a match
-// branch's patterns are written that way.
+// not when it separates a match branch's patterns. Every source here is
+// accepted by Godot 4.7.2.
 func TestCommaInsideAMultilineLambdaBody(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -23,6 +23,10 @@ func TestCommaInsideAMultilineLambdaBody(t *testing.T) {
 		{"a string holding a colon", "var x = [func(v):\n\t\tmatch v:\n\t\t\t1, \"a:b\":\n\t\t\t\tpass\n]\n"},
 		{"patterns in a nested match", "var x = [func(v):\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tmatch v:\n\t\t\t\t\t2, 3:\n\t\t\t\t\t\tpass\n]\n"},
 		{"a branch inside an if", "var x = [func(v):\n\t\tif true:\n\t\t\tmatch v:\n\t\t\t\t1, 2:\n\t\t\t\t\tpass\n]\n"},
+		{"a continuation inside the patterns", "var x = [func(v):\n\t\tmatch v:\n\t\t\t1, \\\n\t\t\t\t2:\n\t\t\t\tpass\n]\n"},
+		{"a branch body on the header line", "var x = [func(v):\n\t\tmatch v:\n\t\t\t1, 2: pass\n]\n"},
+		{"a match after another statement", "var x = [func(v):\n\t\tprint(v)\n\t\tmatch v:\n\t\t\t1, 2:\n\t\t\t\tpass\n]\n"},
+		{"two branches with pattern lists", "var x = [func(v):\n\t\tmatch v:\n\t\t\t1, 2:\n\t\t\t\tpass\n\t\t\t3, 4:\n\t\t\t\tpass\n]\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.Parse("comma.gd", []byte(test.source))
@@ -62,9 +66,33 @@ func TestCommaStillEndsALambdaBody(t *testing.T) {
 			want:   "var x = [\n\tfunc():\n\t\tif true:\n\t\t\tpass,\n\t2,\n]\n",
 		},
 		{
+			// Godot rejects a one-tab indent here but accepts the body's own,
+			// so the comma is written at the indentation the engine allows.
 			name:   "on a line of its own",
-			source: "var x = [func():\n\t\tpass\n\t, 2]\n",
+			source: "var x = [func():\n\t\tpass\n\t\t, 2]\n",
 			want:   "var x = [\n\tfunc():\n\t\tpass,\n\t2,\n]\n",
+		},
+		{
+			name:   "before a second multiline lambda",
+			source: "var x = [func():\n\t\tpass, func():\n\t\t\tpass]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass,\n\tfunc():\n\t\tpass,\n]\n",
+		},
+		{
+			// Godot accepts match as a name, so the keyword also appears where
+			// it opens no block and holds no pattern list.
+			name:   "after a call to a method named match",
+			source: "var x = [func(v):\n\t\tv.match(\"a\"), 2]\n",
+			want:   "var x = [\n\tfunc(v):\n\t\tv.match(\"a\"),\n\t2,\n]\n",
+		},
+		{
+			name:   "after a variable named match",
+			source: "var x = [func(_v):\n\t\tvar match = 1, 2]\n",
+			want:   "var x = [\n\tfunc(_v):\n\t\tvar match = 1,\n\t2,\n]\n",
+		},
+		{
+			name:   "between two lambda dictionary values",
+			source: "var d = {1: func():\n\t\tpass, 2: func():\n\t\tpass}\n",
+			want:   "var d = {\n\t1: func():\n\t\tpass,\n\t2: func():\n\t\tpass,\n}\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -76,5 +104,15 @@ func TestCommaStillEndsALambdaBody(t *testing.T) {
 				t.Errorf("formatted = %q, want %q", formatted, test.want)
 			}
 		})
+	}
+}
+
+// Godot rejects a match branch whose pattern list is split across lines, even
+// inside brackets, so the comma at the end of the line must not be read as a
+// pattern separator that holds the body open.
+func TestASplitPatternListIsRejected(t *testing.T) {
+	source := "var x = [func(v):\n\t\tmatch v:\n\t\t\t1,\n\t\t\t2:\n\t\t\t\tpass\n]\n"
+	if _, err := parser.Parse("comma.gd", []byte(source)); err == nil {
+		t.Fatal("parse succeeded, want a positioned error")
 	}
 }
