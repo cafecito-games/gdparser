@@ -99,8 +99,10 @@ func TestOneLineAnnotationBlockInAMatchAndNested(t *testing.T) {
 			want:   "func f(x):\n\tmatch x:\n\t\t1:\n\t\t\tpass\n\t@warning_ignore(\"unused_variable\")\n\tvar y = 1\n",
 		},
 		{
-			// The "else" stands at the inner if's level, so it continues the
-			// inner one rather than the one holding it.
+			// The inner if is the one still open when the "else" is read, so
+			// it takes it. Both are written on the line the outer one opens,
+			// which leaves no dedent between the inner block and the "else"
+			// to close the inner if first.
 			name:   "an else after a one-line if nested in another",
 			source: "func f(x):\n\tif x: if x: @warning_ignore(\"unused_variable\")\n\telse: var y = 1\n",
 			want:   "func f(x):\n\tif x:\n\t\tif x:\n\t\t\tpass\n\t\telse:\n\t\t\t@warning_ignore(\"unused_variable\")\n\t\t\tvar y = 1\n",
@@ -142,6 +144,13 @@ func TestOneLineAnnotationBlockReadsOneAnnotation(t *testing.T) {
 	}
 	if got := gdformat.File(file); got != want {
 		t.Fatalf("formatted:\n--- got ---\n%s--- want ---\n%s", got, want)
+	}
+	reparsed, err := parser.Parse("block.gd", []byte(want))
+	if err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	if again := gdformat.File(reparsed); again != want {
+		t.Fatalf("not idempotent:\n--- first ---\n%s--- second ---\n%s", want, again)
 	}
 	withElse := "func f(x):\n\tif x: @warning_ignore(\"unused_variable\") @warning_ignore(\"shadowed_variable\")\n\telse: pass\n"
 	if _, err := parser.Parse("block.gd", []byte(withElse)); err == nil {
