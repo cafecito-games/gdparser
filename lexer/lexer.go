@@ -4,6 +4,7 @@ package lexer
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -135,7 +136,10 @@ type lexer struct {
 	// own, which is what Lex does in the absence of a parser.
 	tracksBrackets bool
 	depth          int
-	indents        []int
+	// indentChar is the character the file indents with, chosen by the first
+	// line that has any indentation, and zero until then.
+	indentChar byte
+	indents    []int
 	// blocks holds the indentation stacks set aside for the lambda bodies that
 	// are open, innermost last.
 	blocks [][]int
@@ -251,18 +255,22 @@ func (l *lexer) step() error {
 	case c == 'r' && (l.peekN(1) == '"' || l.peekN(1) == '\''):
 		// A raw string literal, r"...", where backslashes are literal.
 		l.advance()
-		if err := l.scanString(start); err != nil {
+		if err := l.scanString(start, true); err != nil {
 			return err
 		}
 	case isIdentifierStart(c):
 		l.scanIdentifier(start)
 	case isDigit(c):
-		l.scanNumber(start)
+		if err := l.scanNumber(start); err != nil {
+			return err
+		}
 	case c == '.' && isDigit(l.peekN(1)):
 		// A float with its leading zero omitted, as in .5.
-		l.scanNumber(start)
+		if err := l.scanNumber(start); err != nil {
+			return err
+		}
 	case c == '\'' || c == '"':
-		if err := l.scanString(start); err != nil {
+		if err := l.scanString(start, false); err != nil {
 			return err
 		}
 	default:
@@ -275,7 +283,7 @@ func (l *lexer) step() error {
 
 func (l *lexer) scanIndent() error {
 	startOffset := l.offset
-	columns, offset := measureIndent(l.source, l.offset)
+	columns, offset, indentChar, mixed := measureIndent(l.source, l.offset)
 	for l.offset < offset {
 		l.advance()
 	}
@@ -308,6 +316,21 @@ func (l *lexer) scanIndent() error {
 		}
 		return nil
 	}
+	// Indentation is written one way throughout a file, and one way within a
+	// line. Godot settles both here, where a line of code begins.
+	if mixed {
+		return &Error{Position: p, Message: "a line's indentation mixes tabs and spaces"}
+	}
+	if indentChar != 0 {
+		if l.indentChar == 0 {
+			l.indentChar = indentChar
+		} else if indentChar != l.indentChar {
+			return &Error{
+				Position: p,
+				Message:  "indented with a " + indentCharName(indentChar) + " where the file indents with a " + indentCharName(l.indentChar),
+			}
+		}
+	}
 	if columns > top {
 		l.pushIndent(columns)
 		l.emit(token.Indent, "", p)
@@ -338,22 +361,41 @@ func (l *lexer) nextCodeIndent() (int, bool) {
 	return columns, ok
 }
 
-// measureIndent returns the indentation width of the line starting at offset,
-// and the offset of its first non-indentation byte. A tab advances to the next
-// multiple of four columns, as Godot's tokenizer measures it.
-func measureIndent(source []byte, offset int) (columns, next int) {
+// tabSize is the width Godot's tokenizer gives a tab when it measures
+// indentation. It counts a flat tab_size columns for each one rather than
+// advancing to the next multiple, so that a line mixing the two is measured the
+// same wherever the tab falls.
+const tabSize = 4
+
+// measureIndent returns the indentation width of the line starting at offset, the
+// offset of its first non-indentation byte, the character the line indents with,
+// and whether the line mixed that character with the other one.
+func measureIndent(source []byte, offset int) (columns, next int, indentChar byte, mixed bool) {
 	for offset < len(source) {
-		switch source[offset] {
+		space := source[offset]
+		switch space {
 		case ' ':
 			columns++
 		case '\t':
-			columns += 4 - columns%4
+			columns += tabSize
 		default:
-			return columns, offset
+			return columns, offset, indentChar, mixed
 		}
+		if indentChar == 0 {
+			indentChar = space
+		}
+		mixed = mixed || space != indentChar
 		offset++
 	}
-	return columns, offset
+	return columns, offset, indentChar, mixed
+}
+
+// indentCharName names an indentation character for an error message.
+func indentCharName(c byte) string {
+	if c == '\t' {
+		return "tab"
+	}
+	return "space"
 }
 
 // nextCodeIndent returns the indentation width of the next line that holds
@@ -369,7 +411,7 @@ func nextCodeIndent(source []byte, offset int) (columns, start int, ok bool) {
 			return 0, len(source), false
 		}
 		offset++
-		columns, next := measureIndent(source, offset)
+		columns, next, _, _ := measureIndent(source, offset)
 		if next >= len(source) {
 			return 0, len(source), false
 		}
@@ -456,27 +498,58 @@ func (l *lexer) scanIdentifier(start token.Position) {
 	l.emit(token.LookupIdentifier(text), text, start)
 }
 
-func (l *lexer) scanNumber(start token.Position) {
-	l.atStart = false
+// scanNumber reads a numeric literal, holding to the rules Godot's number()
+// states in modules/gdscript/gdscript_tokenizer.cpp: an underscore may separate
+// digits but not stand beside another one, nor open a literal after its base
+// prefix or its decimal point; a base prefix needs a digit of that base; a
+// decimal point belongs to no hexadecimal or binary literal, and to a decimal one
+// only once; and an exponent needs a value.
+func (l *lexer) scanNumber(start token.Position) error {
 	begin := l.offset
-	if l.peek() == '0' && (l.peekN(1) == 'x' || l.peekN(1) == 'X' || l.peekN(1) == 'b' || l.peekN(1) == 'B') {
+	digit := isDigit
+	base := 10
+	if l.peek() == '0' && (l.peekN(1) == 'x' || l.peekN(1) == 'X') {
+		base, digit = 16, isHexDigit
+	} else if l.peek() == '0' && (l.peekN(1) == 'b' || l.peekN(1) == 'B') {
+		base, digit = 2, isBinaryDigit
+	}
+	if base != 10 {
 		l.advance()
-		l.advance()
-		for !l.done() && (isDigit(l.peek()) || isHexLetter(l.peek()) || l.peek() == '_') {
-			l.advance()
+		prefix := l.advance()
+		if l.peek() == '_' {
+			return l.numberError("an underscore may not open a literal after \"0" + string(prefix) + "\"")
+		}
+		digits, err := l.scanDigits(digit)
+		if err != nil {
+			return err
+		}
+		if digits == 0 {
+			return l.numberError("expected a digit after \"0" + string(prefix) + "\"")
+		}
+		if l.peek() == '.' && l.peekN(1) != '.' {
+			if base == 16 {
+				return l.numberError("a hexadecimal literal has no decimal point")
+			}
+			return l.numberError("a binary literal has no decimal point")
 		}
 		l.emit(token.Integer, string(l.source[begin:l.offset]), start)
-		return
+		return nil
 	}
-	for !l.done() && (isDigit(l.peek()) || l.peek() == '_') {
-		l.advance()
+	if _, err := l.scanDigits(digit); err != nil {
+		return err
 	}
 	typ := token.Integer
 	if l.peek() == '.' && l.peekN(1) != '.' {
 		typ = token.Float
 		l.advance()
-		for !l.done() && (isDigit(l.peek()) || l.peek() == '_') {
-			l.advance()
+		if l.peek() == '_' {
+			return l.numberError("an underscore may not follow a decimal point")
+		}
+		if _, err := l.scanDigits(digit); err != nil {
+			return err
+		}
+		if l.peek() == '.' && l.peekN(1) != '.' {
+			return l.numberError("a literal has at most one decimal point")
 		}
 	}
 	if l.peek() == 'e' || l.peek() == 'E' {
@@ -485,18 +558,49 @@ func (l *lexer) scanNumber(start token.Position) {
 		if l.peek() == '+' || l.peek() == '-' {
 			l.advance()
 		}
-		for !l.done() && (isDigit(l.peek()) || l.peek() == '_') {
-			l.advance()
+		digits, err := l.scanDigits(digit)
+		if err != nil {
+			return err
+		}
+		if digits == 0 {
+			return l.numberError("expected an exponent value after \"e\"")
 		}
 	}
 	l.emit(typ, string(l.source[begin:l.offset]), start)
+	return nil
 }
 
-// scanString reads a string literal. Only the end of the source leaves one
-// unterminated: Godot's tokenizer takes a line break inside a quoted string as
-// part of its text, whether the string is triple-quoted or not, and reports
-// nothing until it runs out of source.
-func (l *lexer) scanString(start token.Position) error {
+// scanDigits consumes a run of digits of one base, along with the underscores
+// that separate them, and returns how many digits it read.
+func (l *lexer) scanDigits(digit func(byte) bool) (int, error) {
+	count := 0
+	previousWasUnderscore := false
+	for !l.done() && (digit(l.peek()) || l.peek() == '_') {
+		if l.peek() == '_' {
+			if previousWasUnderscore {
+				return 0, l.numberError("underscores may not be adjacent in a numeric literal")
+			}
+			previousWasUnderscore = true
+		} else {
+			previousWasUnderscore = false
+			count++
+		}
+		l.advance()
+	}
+	return count, nil
+}
+
+// numberError reports a malformed numeric literal at the scan position.
+func (l *lexer) numberError(message string) error {
+	return &Error{Position: l.position(), Message: message}
+}
+
+// scanString reads a string literal. raw marks the r-prefixed form, in which a
+// backslash is part of the text rather than opening an escape. Only the end of
+// the source leaves a string unterminated: Godot's tokenizer takes a line break
+// inside a quoted string as part of its text, whether the string is
+// triple-quoted or not, and reports nothing until it runs out of source.
+func (l *lexer) scanString(start token.Position, raw bool) error {
 	l.atStart = false
 	begin := start.Offset
 	quote := l.advance()
@@ -508,8 +612,17 @@ func (l *lexer) scanString(start token.Position) error {
 	for !l.done() {
 		if l.peek() == '\\' {
 			l.advance()
-			if !l.done() {
+			if l.done() {
+				break
+			}
+			if raw {
+				// A backslash escapes only the quote and itself here, which is
+				// what lets an r-string hold a quote at all.
 				l.advance()
+				continue
+			}
+			if err := l.scanEscape(); err != nil {
+				return err
 			}
 			continue
 		}
@@ -528,6 +641,37 @@ func (l *lexer) scanString(start token.Position) error {
 		l.advance()
 	}
 	return &Error{Position: start, Message: "unterminated string literal"}
+}
+
+// escapes lists the characters a backslash may introduce in a string, as Godot's
+// string() accepts them. A backslash before a line break escapes the break.
+const escapes = "abfnrtv'\"\\\r\n"
+
+// scanEscape reads the escape whose backslash has been consumed.
+func (l *lexer) scanEscape() error {
+	code := l.peek()
+	if code == 'u' || code == 'U' {
+		digits := 4
+		if code == 'U' {
+			digits = 6
+		}
+		l.advance()
+		for range digits {
+			if l.done() {
+				return &Error{Position: l.position(), Message: "unterminated string literal"}
+			}
+			if !isHexDigit(l.peek()) {
+				return &Error{Position: l.position(), Message: "expected a hexadecimal digit in the unicode escape"}
+			}
+			l.advance()
+		}
+		return nil
+	}
+	if !strings.ContainsRune(escapes, rune(code)) {
+		return &Error{Position: l.position(), Message: fmt.Sprintf(`invalid escape "\%c" in string`, code)}
+	}
+	l.advance()
+	return nil
 }
 
 func (l *lexer) scanOperator(start token.Position) error {
@@ -620,4 +764,7 @@ func isIdentifierStart(c byte) bool {
 }
 func isIdentifierPart(c byte) bool { return isIdentifierStart(c) || isDigit(c) }
 func isDigit(c byte) bool          { return c >= '0' && c <= '9' }
-func isHexLetter(c byte) bool      { return c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' }
+func isBinaryDigit(c byte) bool    { return c == '0' || c == '1' }
+func isHexDigit(c byte) bool {
+	return isDigit(c) || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
