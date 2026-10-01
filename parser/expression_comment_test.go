@@ -136,3 +136,44 @@ func TestCommentBeforeAContinuationKeyword(t *testing.T) {
 		}
 	}
 }
+
+// A comment may stand on a line the header continues over with a backslash.
+// Such a comment is not the one that ended the header's line, so it opens the
+// block, and any number of them may be written.
+func TestCommentsOnBackslashContinuedHeaderLines(t *testing.T) {
+	for _, test := range []struct{ name, source, want string }{
+		{
+			"one comment",
+			"func f(x):\n\tif x == 0 \\\n\t\t\t# one\n\t\t\tand x != 3:\n\t\tpass\n",
+			"func f(x):\n\tif x == 0 and x != 3:\n\t\t# one\n\t\tpass\n",
+		},
+		{
+			"several comments",
+			"func f(x):\n\tif x == 0 \\\n\t\t\t# one\n\t\t\t# two\n\t\t\tand (x < 1 or x > 2) \\\n\t\t\t# three\n\t\t\tand x != 3:\n\t\tpass\n",
+			"func f(x):\n\tif x == 0 and (x < 1 or x > 2) and x != 3:\n\t\t# one\n\t\t# two\n\t\t# three\n\t\tpass\n",
+		},
+		{
+			"beside the comment that ends the header's line",
+			"func f(x):\n\tif x == 0 \\\n\t\t\t# one\n\t\t\tand x != 3:  # why\n\t\tpass\n",
+			"func f(x):\n\tif x == 0 and x != 3:  # why\n\t\t# one\n\t\tpass\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("comment.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			got := gdformat.File(file)
+			if got != test.want {
+				t.Fatalf("formatted:\n--- got ---\n%s--- want ---\n%s", got, test.want)
+			}
+			reparsed, err := parser.Parse("comment.gd", []byte(got))
+			if err != nil {
+				t.Fatalf("reparse: %v", err)
+			}
+			if again := gdformat.File(reparsed); again != got {
+				t.Fatalf("not idempotent:\n--- first ---\n%s--- second ---\n%s", got, again)
+			}
+		})
+	}
+}

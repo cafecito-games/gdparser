@@ -544,16 +544,23 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 		headerComments = append(headerComments, comment)
 	}
 	p.strayComments = nil
-	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
+	colon, err := p.expect(token.Colon, "expected ':' before block")
+	if err != nil {
 		return nil, token.Position{}, err
 	}
 	// The colon's line may end with a comment, which is marked as the header's
 	// own and leads the block so that formatting can put it back on that line.
 	// The comments held back from the header's continuation lines, which have
 	// nowhere to sit inside the header, open the block after it, since that is
-	// the nearest scope the statement owns.
-	if p.at(token.Comment) {
-		headerComments = append([]ast.Statement{headerComment(p.advance())}, headerComments...)
+	// the nearest scope the statement owns. A comment written on a line the
+	// header continues over with a backslash is only scanned here, after the
+	// colon, so the line a comment stands on is what tells the two apart.
+	for p.at(token.Comment) {
+		if p.peek().Span.Start.Line == colon.Span.End.Line {
+			headerComments = append([]ast.Statement{headerComment(p.advance())}, headerComments...)
+			continue
+		}
+		headerComments = append(headerComments, commentNode(p.advance()))
 	}
 	if !p.at(token.Newline) {
 		if forLambda && !beginsStatement(p.peek().Type) {
