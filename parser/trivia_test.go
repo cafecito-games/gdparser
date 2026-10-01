@@ -62,6 +62,24 @@ func TestTrailingCommentIsAChild(t *testing.T) {
 	}
 }
 
+// A standalone annotation decorates nothing, so it stands as a statement of its
+// own rather than attaching to the declaration that follows it. Godot adds the
+// export group markers to the class rather than to the member below them.
+func TestStandaloneAnnotationDecoratesNothing(t *testing.T) {
+	file := parseSource(t, "@export_group(\"Move\")\n@export var jump := 2.0\n")
+	if len(file.Statements) != 2 {
+		t.Fatalf("got %d statements, want the group marker and the declaration", len(file.Statements))
+	}
+	group, ok := file.Statements[0].(*ast.Annotation)
+	if !ok || group.Name != "export_group" {
+		t.Fatalf("statement 0 = %#v, want the export_group annotation", file.Statements[0])
+	}
+	attached := ast.Annotations(file.Statements[1])
+	if len(attached) != 1 || attached[0].Name != "export" {
+		t.Fatalf("the declaration carries %d annotations, want just export", len(attached))
+	}
+}
+
 func TestAnnotationsAttachToDeclarations(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -71,7 +89,7 @@ func TestAnnotationsAttachToDeclarations(t *testing.T) {
 	}{
 		{"inline", "@export var speed := 1.0\n", []string{"export"}, []bool{false}},
 		{"own line", "@onready\nvar node := $Sprite2D\n", []string{"onready"}, []bool{true}},
-		{"several", "@export_group(\"Move\")\n@export var jump := 2.0\n", []string{"export_group", "export"}, []bool{true, false}},
+		{"several", "@onready\n@export var jump := 2.0\n", []string{"onready", "export"}, []bool{true, false}},
 		{"on a function", "@rpc(\"any_peer\")\nfunc f() -> void:\n\tpass\n", []string{"rpc"}, []bool{true}},
 		{"on a signal", "@warning_ignore(\"unused\") signal done()\n", []string{"warning_ignore"}, []bool{false}},
 	}

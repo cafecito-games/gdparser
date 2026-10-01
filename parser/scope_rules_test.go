@@ -29,7 +29,7 @@ func TestClassBodyHoldsOnlyDeclarations(t *testing.T) {
 		})
 	}
 	for _, source := range []string{
-		"extends Node\nclass_name A\n\n@tool\nvar a := 1\nconst B := 2\nsignal s\nenum E { X }\n\nstatic var c := 3\n\nfunc f():\n\tpass\n\nclass Inner:\n\tpass\n",
+		"@tool\nextends Node\nclass_name A\n\n@export var a := 1\nconst B := 2\nsignal s\nenum E { X }\n\nstatic var c := 3\n\nfunc f():\n\tpass\n\nclass Inner:\n\tpass\n",
 		"pass\n",
 		// A string on its own stands in for a block comment.
 		"\"\"\"a block comment\"\"\"\nvar a := 1\n",

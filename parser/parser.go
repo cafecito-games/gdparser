@@ -204,6 +204,9 @@ func (p *parser) takeBlankLines() int {
 func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error) {
 	var statements []ast.Statement
 	var pending []*ast.Annotation
+	// scriptHeadOpen reports that nothing but a comment or an annotation has been
+	// read yet, which is where an annotation of the script itself belongs.
+	scriptHeadOpen := true
 	pendingBlankLines := 0
 	// flush emits annotations that decorate no declaration as plain statements.
 	flush := func() {
@@ -261,6 +264,35 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			return nil, err
 		}
 		if annotation, ok := stmt.(*ast.Annotation); ok {
+			// Where the annotation stands decides what it may be: the script's
+			// own annotations come before extends and class_name, a class body
+			// takes its members' and the standalone ones, and a function body
+			// takes a statement's.
+			allowed := targetStatement | targetStandalone
+			if classBody {
+				allowed = targetClassLevel | targetStandalone
+				if scriptHeadOpen {
+					allowed |= targetScript
+				}
+			}
+			if err := p.checkAnnotation(annotation, allowed); err != nil {
+				return nil, err
+			}
+			if decoratesNothing(annotation.Name) {
+				// The annotation belongs to no declaration below it, so it stands
+				// as a statement of its own rather than waiting for one. Godot
+				// handles these where it reads them, for the same reason.
+				annotation.BlankLinesBefore = blankLines
+				annotation.OwnLine = true
+				statements = append(statements, annotation)
+				if p.at(token.Comment) {
+					annotation.TrailingComment = commentNode(p.advance())
+				}
+				if _, err := p.expect(token.Newline, "expected end of line after the annotation"); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if len(pending) == 0 {
 				pendingBlankLines = blankLines
 			}
@@ -277,7 +309,17 @@ func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error)
 			}
 			continue
 		}
+		if !opensScriptHead(stmt) {
+			// Godot reads a script's own annotations in a prologue, before
+			// "class_name" and "extends", and those before everything else. Only
+			// a comment, a string standing in for one, and another annotation
+			// leave the head open; the two directives close it.
+			scriptHeadOpen = false
+		}
 		if len(pending) > 0 {
+			if err := p.checkAnnotationTargets(stmt, pending); err != nil {
+				return nil, err
+			}
 			if attachAnnotations(stmt, pending) {
 				blankLines = pendingBlankLines
 				pending = nil
@@ -696,6 +738,20 @@ func beginsStatement(typ token.Type) bool {
 		return true
 	}
 	return beginsExpression(typ)
+}
+
+// opensScriptHead reports whether statement leaves the head of the script open,
+// which is where an annotation of the script itself belongs. A comment does, and
+// so does a string written on its own, which Godot reads in the same prologue.
+func opensScriptHead(statement ast.Statement) bool {
+	switch node := statement.(type) {
+	case *ast.Comment, *ast.Annotation:
+		return true
+	case *ast.ExpressionStatement:
+		literal, ok := node.Expression.(*ast.Literal)
+		return ok && literal.Kind == ast.StringLiteral
+	}
+	return false
 }
 
 // beginsClassMember reports whether typ may open something a class body holds:
