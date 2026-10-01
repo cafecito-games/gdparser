@@ -230,3 +230,55 @@ func TestDeeperCommentStaysInTheBlockItFollows(t *testing.T) {
 		t.Fatalf("top-level statement 1 = %T, want *ast.FunctionDeclaration", file.Statements[1])
 	}
 }
+
+func TestNestedMultilineLambda(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{"collection inside a lambda body", "var x = [func():\n\t\tvar a = [func():\n\t\t\t\tpass\n\t\t]\n]\n"},
+		{"call inside a lambda body", "var x = [func():\n\t\tf(func():\n\t\t\t\tpass\n\t\t)\n\t\tpass\n]\n"},
+		{"inner body ended by a comma", "var x = [func():\n\t\tvar a = [func():\n\t\t\t\tpass\n\t\t, 2]\n\t\tpass\n]\n"},
+		{"dictionary inside a lambda body", "var x = [func():\n\t\tvar d = {\n\t\t\t\"k\": func():\n\t\t\t\t\tpass\n\t\t}\n\t\tpass\n]\n"},
+		{"three bodies deep", "var x = [func():\n\t\tvar a = [func():\n\t\t\t\tvar b = [func():\n\t\t\t\t\t\tpass\n\t\t\t\t]\n\t\t\t\tpass\n\t\t]\n\t\tpass\n]\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("nested.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := gdformat.File(file)
+			again, err := parser.Parse("nested.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+			if reformatted := gdformat.File(again); reformatted != formatted {
+				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
+			}
+		})
+	}
+}
+
+func TestOuterLambdaBodyContinuesAfterANestedLambda(t *testing.T) {
+	source := "var x = [func():\n\t\tf(func():\n\t\t\t\tpass\n\t\t)\n\t\tpass\n]\n"
+	file, err := parser.Parse("nested.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declaration := file.Statements[0].(*ast.VariableDeclaration)
+	array := declaration.Value.(*ast.ArrayLiteral)
+	if len(array.Elements) != 1 {
+		t.Fatalf("array holds %d elements, want 1", len(array.Elements))
+	}
+	outer := array.Elements[0].(*ast.LambdaExpression)
+	if len(outer.Body) != 2 {
+		t.Fatalf("outer lambda body holds %d statements, want 2", len(outer.Body))
+	}
+	keyword, ok := outer.Body[1].(*ast.KeywordStatement)
+	if !ok {
+		t.Fatalf("outer lambda body statement 1 = %T, want *ast.KeywordStatement", outer.Body[1])
+	}
+	if keyword.Keyword != "pass" {
+		t.Fatalf("outer lambda body statement 1 keyword = %q, want \"pass\"", keyword.Keyword)
+	}
+}
