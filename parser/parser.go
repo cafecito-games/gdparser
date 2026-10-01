@@ -403,16 +403,24 @@ func spanFrom(start token.Position, end token.Position) ast.Base {
 	return ast.Base{SourceSpan: token.Span{Start: start, End: end}}
 }
 
-// takeCollectionComments consumes a run of comments written inside a bracketed
-// construct and anchors each one to the item at index. A comment that starts on
-// the line the previous token ended is recorded as trailing that line.
+// takeCollectionComments consumes a run of comments and anchors each one to the
+// item at index. A comment that starts on the line the previous token ended is
+// recorded as trailing that line. A newline, indent or dedent carries no text,
+// so a comment that follows one begins its own line however the spans read.
 func (p *parser) takeCollectionComments(comments *[]ast.CollectionComment, index int) {
 	for p.at(token.Comment) {
-		trailing := p.current > 0 && p.previous().Span.End.Line == p.peek().Span.Start.Line
+		trailing := p.current > 0 && !endsLine(p.previous().Type) &&
+			p.previous().Span.End.Line == p.peek().Span.Start.Line
 		*comments = append(*comments, ast.CollectionComment{
 			Comment: commentNode(p.advance()), Index: index, Trailing: trailing,
 		})
 	}
+}
+
+// endsLine reports whether typ is a token that carries no text of its own and
+// so cannot have a comment trailing it on the same line.
+func endsLine(typ token.Type) bool {
+	return typ == token.Newline || typ == token.Indent || typ == token.Dedent
 }
 
 func commentNode(tok token.Token) *ast.Comment {

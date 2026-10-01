@@ -537,6 +537,11 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 	if _, err := p.expect(token.Colon, "expected ':' after match expression"); err != nil {
 		return nil, err
 	}
+	// A comment may end the "match" line, and more may sit between it and the
+	// first case. None of them belongs to a case body, so they are held by the
+	// statement, anchored to the case they precede.
+	var comments []ast.CollectionComment
+	p.takeCollectionComments(&comments, 0)
 	if _, err := p.expect(token.Newline, "expected newline after match expression"); err != nil {
 		return nil, err
 	}
@@ -546,7 +551,7 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 		if !p.at(token.Comment) {
 			break
 		}
-		p.advance() // Match-level comments are currently trivia.
+		p.takeCollectionComments(&comments, 0)
 		if _, err := p.expect(token.Newline, "expected end of comment line"); err != nil {
 			return nil, err
 		}
@@ -567,7 +572,7 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			break
 		}
 		if p.at(token.Comment) {
-			p.advance()
+			p.takeCollectionComments(&comments, len(cases))
 			p.match(token.Newline)
 			continue
 		}
@@ -619,6 +624,7 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 	}
 	return &ast.MatchStatement{
 		Base: spanFrom(start.Span.Start, end.Span.End), KeywordSpan: start.Span, Value: value, Cases: cases,
+		Comments: comments,
 	}, nil
 }
 
