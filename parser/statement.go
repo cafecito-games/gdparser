@@ -566,10 +566,12 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 			comma = p.advance()
 		}
 		// A branch that binds the matched value may hold no other pattern,
-		// because the other patterns would leave the name unbound.
+		// because the other patterns would leave the name unbound. The rule
+		// covers a bind at any depth, so a bind inside an array or dictionary
+		// pattern counts as well.
 		if len(matchCase.Patterns) > 1 {
 			for _, pattern := range matchCase.Patterns {
-				if _, ok := pattern.(*ast.BindingPattern); ok {
+				if bindsValue(pattern) {
 					return nil, p.error(comma, "a variable bind may not be combined with another pattern")
 				}
 			}
@@ -685,4 +687,17 @@ func componentEnd(body []ast.Statement, fallback token.Position) token.Position 
 		}
 	}
 	return fallback
+}
+
+// bindsValue reports whether pattern binds the matched value, at any depth
+// inside an array or dictionary pattern.
+func bindsValue(pattern ast.Expression) bool {
+	bound := false
+	ast.Inspect(pattern, func(node ast.Node) bool {
+		if _, ok := node.(*ast.BindingPattern); ok {
+			bound = true
+		}
+		return !bound
+	})
+	return bound
 }
