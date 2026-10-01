@@ -397,6 +397,16 @@ func TestLexCommentExcludesACarriageReturn(t *testing.T) {
 	if comment.Span.End.Column != 15 {
 		t.Errorf("span end column = %d, want 15", comment.Span.End.Column)
 	}
+	// A carriage return that is the file's last byte ends the line too.
+	atEnd, err := lexer.Lex([]byte("var a = 1  # c\r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range atEnd {
+		if tok.Type == token.Comment && tok.Lexeme != "# c" {
+			t.Errorf("carriage return at end of file: lexeme = %q, want %q", tok.Lexeme, "# c")
+		}
+	}
 	// A carriage return that does not end a line stays part of the comment.
 	lone, err := lexer.Lex([]byte("var a = 1  # x\ry\n"))
 	if err != nil {

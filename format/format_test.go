@@ -758,6 +758,10 @@ func TestCarriageReturnsLeaveNoTraceInAComment(t *testing.T) {
 		{"a trailing comment", "var a = 1  # c\r\nvar b = 2\r\n", "var a = 1  # c\nvar b = 2\n"},
 		{"a comment on its own line", "func a():\r\n\t# c\r\n\tpass\r\n", "func a():\n\t# c\n\tpass\n"},
 		{"a comment ending the file", "var a = 1  # c\r\n", "var a = 1  # c\n"},
+		// Godot 4.7.2 accepts a file whose last byte is the carriage return of
+		// its final line, so the comment must not keep it.
+		{"a carriage return as the last byte", "var a = 1  # c\r", "var a = 1  # c\n"},
+		{"a comment-only line ending the file", "# c\r", "# c\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.Parse("crlf.gd", []byte(test.source))
@@ -770,6 +774,15 @@ func TestCarriageReturnsLeaveNoTraceInAComment(t *testing.T) {
 			}
 			if strings.ContainsRune(formatted, '\r') {
 				t.Errorf("formatted source carries a carriage return: %q", formatted)
+			}
+			// Dropping the carriage return must settle in one pass rather than
+			// taking a second format to converge.
+			again, err := parser.Parse("crlf.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("reparse: %v", err)
+			}
+			if second := format.File(again); second != formatted {
+				t.Errorf("formatting is not idempotent: %q then %q", formatted, second)
 			}
 		})
 	}
