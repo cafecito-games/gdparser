@@ -5,3 +5,5 @@
 
 # GoReleaser build output
 dist/
+
+/.worktrees/
