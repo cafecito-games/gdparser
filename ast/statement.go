@@ -5,6 +5,7 @@ import "github.com/cafecito-games/gdparser/token"
 // ExpressionStatement evaluates an expression for its side effects.
 type ExpressionStatement struct {
 	Base
+	Trivia
 	Expression Expression `json:"expression"`
 }
 
@@ -14,6 +15,8 @@ func (*ExpressionStatement) statement() {}
 // VariableDeclaration declares var or const.
 type VariableDeclaration struct {
 	Base
+	Trivia
+	Annotations       []*Annotation   `json:"annotations,omitempty"`
 	Name              string          `json:"name"`
 	NameSpan          token.Span      `json:"name_span,omitempty"`
 	Type              string          `json:"type,omitempty"`
@@ -37,6 +40,7 @@ func (*VariableDeclaration) statement() {}
 // Assignment assigns Value to Target using Operator.
 type Assignment struct {
 	Base
+	Trivia
 	Target       Expression `json:"target"`
 	Operator     string     `json:"operator"`
 	OperatorSpan token.Span `json:"operator_span,omitempty"`
@@ -49,6 +53,7 @@ func (*Assignment) statement() {}
 // ReturnStatement optionally returns a value.
 type ReturnStatement struct {
 	Base
+	Trivia
 	KeywordSpan token.Span `json:"keyword_span,omitempty"`
 	Value       Expression `json:"value,omitempty"`
 }
@@ -67,6 +72,7 @@ type Branch struct {
 // IfStatement contains its if/elif branches and optional else body.
 type IfStatement struct {
 	Base
+	Trivia
 	Branches        []Branch    `json:"branches"`
 	Else            []Statement `json:"else,omitempty"`
 	ElseSpan        token.Span  `json:"else_span,omitempty"`
@@ -79,6 +85,7 @@ func (*IfStatement) statement() {}
 // WhileStatement is a condition-controlled loop.
 type WhileStatement struct {
 	Base
+	Trivia
 	KeywordSpan token.Span  `json:"keyword_span,omitempty"`
 	Condition   Expression  `json:"condition"`
 	Body        []Statement `json:"body"`
@@ -90,6 +97,7 @@ func (*WhileStatement) statement() {}
 // ForStatement iterates one variable over an expression.
 type ForStatement struct {
 	Base
+	Trivia
 	KeywordSpan  token.Span  `json:"keyword_span,omitempty"`
 	Variable     string      `json:"variable"`
 	VariableSpan token.Span  `json:"variable_span,omitempty"`
@@ -106,6 +114,7 @@ func (*ForStatement) statement() {}
 // KeywordStatement is pass, break, or continue.
 type KeywordStatement struct {
 	Base
+	Trivia
 	Keyword     string     `json:"keyword"`
 	KeywordSpan token.Span `json:"keyword_span,omitempty"`
 }
@@ -127,17 +136,19 @@ type Parameter struct {
 // FunctionDeclaration declares a function.
 type FunctionDeclaration struct {
 	Base
-	Name            string      `json:"name"`
-	NameSpan        token.Span  `json:"name_span,omitempty"`
-	Parameters      []Parameter `json:"parameters"`
-	ReturnType      string      `json:"return_type,omitempty"`
-	ReturnTypeSpan  token.Span  `json:"return_type_span,omitempty"`
-	ReturnArrowSpan token.Span  `json:"return_arrow_span,omitempty"`
-	Static          bool        `json:"static,omitempty"`
-	StaticSpan      token.Span  `json:"static_span,omitempty"`
-	KeywordSpan     token.Span  `json:"keyword_span,omitempty"`
-	Abstract        bool        `json:"abstract,omitempty"`
-	Body            []Statement `json:"body"`
+	Trivia
+	Annotations     []*Annotation `json:"annotations,omitempty"`
+	Name            string        `json:"name"`
+	NameSpan        token.Span    `json:"name_span,omitempty"`
+	Parameters      []Parameter   `json:"parameters"`
+	ReturnType      string        `json:"return_type,omitempty"`
+	ReturnTypeSpan  token.Span    `json:"return_type_span,omitempty"`
+	ReturnArrowSpan token.Span    `json:"return_arrow_span,omitempty"`
+	Static          bool          `json:"static,omitempty"`
+	StaticSpan      token.Span    `json:"static_span,omitempty"`
+	KeywordSpan     token.Span    `json:"keyword_span,omitempty"`
+	Abstract        bool          `json:"abstract,omitempty"`
+	Body            []Statement   `json:"body"`
 }
 
 func (*FunctionDeclaration) node()      {}
@@ -146,13 +157,15 @@ func (*FunctionDeclaration) statement() {}
 // ClassDeclaration declares an inner class.
 type ClassDeclaration struct {
 	Base
-	Name         string      `json:"name"`
-	NameSpan     token.Span  `json:"name_span,omitempty"`
-	Extends      string      `json:"extends,omitempty"`
-	BaseTypeSpan token.Span  `json:"base_type_span,omitempty"`
-	ExtendsSpan  token.Span  `json:"extends_span,omitempty"`
-	KeywordSpan  token.Span  `json:"keyword_span,omitempty"`
-	Body         []Statement `json:"body"`
+	Trivia
+	Annotations  []*Annotation `json:"annotations,omitempty"`
+	Name         string        `json:"name"`
+	NameSpan     token.Span    `json:"name_span,omitempty"`
+	Extends      string        `json:"extends,omitempty"`
+	BaseTypeSpan token.Span    `json:"base_type_span,omitempty"`
+	ExtendsSpan  token.Span    `json:"extends_span,omitempty"`
+	KeywordSpan  token.Span    `json:"keyword_span,omitempty"`
+	Body         []Statement   `json:"body"`
 }
 
 func (*ClassDeclaration) node()      {}
@@ -161,10 +174,12 @@ func (*ClassDeclaration) statement() {}
 // SignalDeclaration declares a signal.
 type SignalDeclaration struct {
 	Base
-	Name        string      `json:"name"`
-	NameSpan    token.Span  `json:"name_span,omitempty"`
-	KeywordSpan token.Span  `json:"keyword_span,omitempty"`
-	Parameters  []Parameter `json:"parameters,omitempty"`
+	Trivia
+	Annotations []*Annotation `json:"annotations,omitempty"`
+	Name        string        `json:"name"`
+	NameSpan    token.Span    `json:"name_span,omitempty"`
+	KeywordSpan token.Span    `json:"keyword_span,omitempty"`
+	Parameters  []Parameter   `json:"parameters,omitempty"`
 }
 
 func (*SignalDeclaration) node()      {}
@@ -192,10 +207,12 @@ type PropertySetter struct {
 // EnumDeclaration declares a named or anonymous enum.
 type EnumDeclaration struct {
 	Base
-	Name        string       `json:"name,omitempty"`
-	NameSpan    token.Span   `json:"name_span,omitempty"`
-	KeywordSpan token.Span   `json:"keyword_span,omitempty"`
-	Members     []EnumMember `json:"members"`
+	Trivia
+	Annotations []*Annotation `json:"annotations,omitempty"`
+	Name        string        `json:"name,omitempty"`
+	NameSpan    token.Span    `json:"name_span,omitempty"`
+	KeywordSpan token.Span    `json:"keyword_span,omitempty"`
+	Members     []EnumMember  `json:"members"`
 }
 
 func (*EnumDeclaration) node()      {}
@@ -213,6 +230,7 @@ type MatchCase struct {
 // MatchStatement performs pattern matching.
 type MatchStatement struct {
 	Base
+	Trivia
 	KeywordSpan token.Span  `json:"keyword_span,omitempty"`
 	Value       Expression  `json:"value"`
 	Cases       []MatchCase `json:"cases"`

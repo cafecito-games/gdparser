@@ -93,19 +93,19 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 	case token.Float:
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.FloatLiteral, Raw: tok.Lexeme}, nil
 	case token.String:
-		return &ast.Literal{Base: base(tok.Span), Kind: ast.StringLiteral, Raw: tok.Lexeme}, nil
+		return stringLiteral(base(tok.Span), ast.StringLiteral, "", tok.Lexeme), nil
 	case token.Ampersand:
 		if !p.at(token.String) {
 			return nil, p.error(tok, "expected string after '&'")
 		}
 		value := p.advance()
-		return &ast.Literal{Base: spanFrom(tok.Span.Start, value.Span.End), Kind: ast.StringNameLiteral, Raw: "&" + value.Lexeme}, nil
+		return stringLiteral(spanFrom(tok.Span.Start, value.Span.End), ast.StringNameLiteral, "&", value.Lexeme), nil
 	case token.Caret:
 		if !p.at(token.String) {
 			return nil, p.error(tok, "expected string after '^'")
 		}
 		value := p.advance()
-		return &ast.Literal{Base: spanFrom(tok.Span.Start, value.Span.End), Kind: ast.NodePathLiteral, Raw: "^" + value.Lexeme}, nil
+		return stringLiteral(spanFrom(tok.Span.Start, value.Span.End), ast.NodePathLiteral, "^", value.Lexeme), nil
 	case token.True, token.False:
 		return &ast.Literal{Base: base(tok.Span), Kind: ast.BoolLiteral, Raw: tok.Lexeme}, nil
 	case token.Null:
@@ -383,4 +383,22 @@ func infixPrecedence(typ token.Type) (int, bool) {
 	default:
 		return -1, false
 	}
+}
+
+// stringLiteral builds a string, string name, or node path literal, recording
+// the quote character and the triple-quoted and raw-prefixed forms so that the
+// formatter can requote it without re-lexing its escapes.
+func stringLiteral(nodeBase ast.Base, kind ast.LiteralKind, prefix, lexeme string) *ast.Literal {
+	literal := &ast.Literal{Base: nodeBase, Kind: kind, Raw: prefix + lexeme}
+	body := lexeme
+	if strings.HasPrefix(body, "r") {
+		literal.RawPrefix = true
+		body = body[1:]
+	}
+	if body == "" {
+		return literal
+	}
+	literal.Quote = body[0]
+	literal.Triple = len(body) >= 6 && body[1] == literal.Quote && body[2] == literal.Quote
+	return literal
 }

@@ -138,9 +138,14 @@ func (p *parser) parsePropertyAccessors(declaration *ast.VariableDeclaration) er
 	}
 	_ = indent
 	for !p.at(token.Dedent, token.EOF) {
+		blankLines := p.takeBlankLines()
 		for p.match(token.Newline) {
+			blankLines++
 		}
 		if p.at(token.Dedent) {
+			// Blank lines written at the end of the block belong to whatever follows
+			// the statement that owns it.
+			p.blankLines = blankLines
 			break
 		}
 		if p.at(token.Comment) {
@@ -508,9 +513,14 @@ func (p *parser) parseMatch() (ast.Statement, error) {
 	}
 	var cases []ast.MatchCase
 	for !p.at(token.Dedent, token.EOF) {
+		blankLines := p.takeBlankLines()
 		for p.match(token.Newline) {
+			blankLines++
 		}
 		if p.at(token.Dedent) {
+			// Blank lines written at the end of the block belong to whatever follows
+			// the statement that owns it.
+			p.blankLines = blankLines
 			break
 		}
 		if p.at(token.Comment) {

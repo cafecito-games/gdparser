@@ -20,6 +20,14 @@ type Literal struct {
 	Base
 	Kind LiteralKind `json:"literal_kind"`
 	Raw  string      `json:"raw"`
+	// Quote is the quote character of a string, string name, or node path
+	// literal, and zero for every other kind.
+	Quote byte `json:"quote,omitempty"`
+	// Triple reports a triple-quoted string literal.
+	Triple bool `json:"triple,omitempty"`
+	// RawPrefix reports an r-prefixed string literal, in which a backslash has
+	// no escaping meaning.
+	RawPrefix bool `json:"raw_prefix,omitempty"`
 }
 
 func (*Literal) node()       {}

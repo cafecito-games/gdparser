@@ -15,6 +15,7 @@ thin user-facing adapter.
 
 - `gdparser.go`: backward-compatible GDScript convenience API.
 - `token/`, `lexer/`, `ast/`, `parser/`, `format/`: the GDScript pipeline.
+  `format.Options` configures emission and defaults to the Godot style guide.
 - `textresource/`: text scene/resource parsing and canonical emission.
 - `configfile/`: ConfigFile parsing and canonical emission for `project.godot`,
   `.cfg`, `.gdextension`, `.import`, and `.remap` files.
@@ -41,6 +42,12 @@ Godot source -> format-specific lexer/parser -> typed tree -> tree, JSON, or can
   must not panic on user-provided source.
 - The formatter must support every public AST node and produce source that the
   parser can read again.
+- Canonical GDScript emission targets the Godot GDScript style guide. Every
+  `format.Options` field's zero value must mean the style guide default, so that
+  a partially populated Options inherits the rest.
+- A statement's `ast.Trivia` and attached annotations are formatting input, not
+  decoration. Blank lines, trailing comments, and annotation placement must
+  survive a parse and format round trip.
 - Preserve expression semantics. In particular, emit parentheses whenever the
   AST's precedence or associativity requires them.
 - GDScript indentation is syntax. Keep indent/dedent handling, multiline

@@ -49,14 +49,42 @@ type parser struct {
 	filename string
 	tokens   []token.Token
 	current  int
+	// blankLines carries the blank lines found at the end of a nested block
+	// across the return from that block, so they count towards the statement
+	// that follows it.
+	blankLines int
+}
+
+// takeBlankLines returns and clears the blank lines left over by a nested block.
+func (p *parser) takeBlankLines() int {
+	count := p.blankLines
+	p.blankLines = 0
+	return count
 }
 
 func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 	var statements []ast.Statement
-	for !p.at(token.EOF) {
-		for p.match(token.Newline) {
+	var pending []*ast.Annotation
+	pendingBlankLines := 0
+	// flush emits annotations that decorate no declaration as plain statements.
+	flush := func() {
+		for index, annotation := range pending {
+			if index == 0 {
+				annotation.BlankLinesBefore = pendingBlankLines
+			}
+			statements = append(statements, annotation)
 		}
-		if block && p.match(token.Dedent) {
+		pending = nil
+	}
+	for !p.at(token.EOF) {
+		blankLines := p.takeBlankLines()
+		for p.match(token.Newline) {
+			blankLines++
+		}
+		if block && p.at(token.Dedent) {
+			p.advance()
+			p.blankLines = blankLines
+			flush()
 			return statements, nil
 		}
 		if p.at(token.EOF) {
@@ -70,6 +98,35 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 		if err != nil {
 			return nil, err
 		}
+		if annotation, ok := stmt.(*ast.Annotation); ok {
+			if len(pending) == 0 {
+				pendingBlankLines = blankLines
+			}
+			pending = append(pending, annotation)
+			if compound {
+				continue
+			}
+			annotation.OwnLine = true
+			if p.at(token.Comment) {
+				annotation.TrailingComment = commentNode(p.advance())
+			}
+			if _, err := p.expect(token.Newline, "expected end of line"); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if len(pending) > 0 {
+			if attachAnnotations(stmt, pending) {
+				blankLines = pendingBlankLines
+				pending = nil
+			} else {
+				flush()
+				blankLines = 0
+			}
+		}
+		if trivia := ast.TriviaOf(stmt); trivia != nil {
+			trivia.BlankLinesBefore = blankLines
+		}
 		statements = append(statements, stmt)
 		if compound {
 			continue
@@ -78,17 +135,42 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 			continue
 		}
 		if p.at(token.Comment) {
-			comment := p.advance()
-			statements = append(statements, commentNode(comment))
+			comment := commentNode(p.advance())
+			if trivia := ast.TriviaOf(stmt); trivia != nil {
+				trivia.TrailingComment = comment
+			} else {
+				statements = append(statements, comment)
+			}
 		}
 		if _, err := p.expect(token.Newline, "expected end of line"); err != nil {
 			return nil, err
 		}
 	}
+	flush()
 	if block {
 		return nil, p.error(p.peek(), "expected an indented block")
 	}
 	return statements, nil
+}
+
+// attachAnnotations binds annotations to the declaration they decorate and
+// reports whether statement can carry them.
+func attachAnnotations(statement ast.Statement, annotations []*ast.Annotation) bool {
+	switch declaration := statement.(type) {
+	case *ast.VariableDeclaration:
+		declaration.Annotations = annotations
+	case *ast.FunctionDeclaration:
+		declaration.Annotations = annotations
+	case *ast.ClassDeclaration:
+		declaration.Annotations = annotations
+	case *ast.SignalDeclaration:
+		declaration.Annotations = annotations
+	case *ast.EnumDeclaration:
+		declaration.Annotations = annotations
+	default:
+		return false
+	}
+	return true
 }
 
 func (p *parser) parseStatement() (ast.Statement, bool, error) {

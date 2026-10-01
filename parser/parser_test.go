@@ -42,12 +42,24 @@ func TestParseRepresentativeScript(t *testing.T) {
 	if file.Name != "player.gd" {
 		t.Fatalf("name = %q", file.Name)
 	}
-	if len(file.Statements) != 10 {
+	// The @export annotation is attached to the declaration it decorates rather
+	// than standing as its own statement.
+	if len(file.Statements) != 9 {
 		t.Fatalf("got %d top-level statements", len(file.Statements))
 	}
-	function, ok := file.Statements[8].(*ast.FunctionDeclaration)
+	speed, ok := file.Statements[6].(*ast.VariableDeclaration)
 	if !ok {
-		t.Fatalf("statement 8 = %T", file.Statements[8])
+		t.Fatalf("statement 6 = %T", file.Statements[6])
+	}
+	if len(speed.Annotations) != 1 || speed.Annotations[0].Name != "export" {
+		t.Fatalf("unexpected annotations on %s: %#v", speed.Name, speed.Annotations)
+	}
+	if speed.Annotations[0].OwnLine {
+		t.Fatal("inline @export recorded as its own line")
+	}
+	function, ok := file.Statements[7].(*ast.FunctionDeclaration)
+	if !ok {
+		t.Fatalf("statement 7 = %T", file.Statements[7])
 	}
 	if function.Name != "damage" || function.ReturnType != "bool" || len(function.Body) != 3 {
 		t.Fatalf("unexpected function: %#v", function)
