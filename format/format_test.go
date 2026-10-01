@@ -367,6 +367,16 @@ func TestCommaAfterItemEndingInAComment(t *testing.T) {
 			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n]\n",
 		},
 		{
+			name:   "same-line trailing comment keeps the separator",
+			source: "var x = [\n\tfunc():\n\t\tpass  # c\n, 2]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass  # c\n\t,\n\t2,\n]\n",
+		},
+		{
+			name:   "same-line trailing comment drops the optional comma",
+			source: "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n]\n",
+		},
+		{
 			name:   "dictionary value ending in a comment",
 			source: "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n}\n",
 			want:   "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n}\n",

@@ -89,7 +89,9 @@ func join(separator doc, parts []doc) doc {
 func endsWithLineComment(d doc) bool {
 	switch node := d.(type) {
 	case docText:
-		return strings.HasPrefix(node.text, "#")
+		// A trailing comment is emitted with the spaces that separate it from
+		// the code it follows, so the marker is not necessarily first.
+		return strings.HasPrefix(strings.TrimLeft(node.text, " \t"), "#")
 	case docConcat:
 		if len(node.parts) == 0 {
 			return false
