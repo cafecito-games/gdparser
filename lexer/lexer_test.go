@@ -1,7 +1,9 @@
 package lexer_test
 
 import (
+	"bytes"
 	"testing"
+	"time"
 
 	"github.com/cafecito-games/gdparser/lexer"
 	"github.com/cafecito-games/gdparser/token"
@@ -215,5 +217,138 @@ func TestLexNestedLambdaLayoutsUnwindIndependently(t *testing.T) {
 		if kinds[i] != typ {
 			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
 		}
+	}
+}
+
+func TestLexCommentUnindentedToNoOuterBlock(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\n\tpass\n  # c\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline, token.Dedent,
+		token.Comment, token.Newline, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}
+
+func TestLexCommentDoesNotCloseABlockTheCodeBelowReenters(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\n\tif true:\n\t\tpass\n\t# c\n\t\tprint()\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The comment sits at the function body's level, but the line below it
+	// returns to the if body, so no block closes at the comment.
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.If, token.True, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline,
+		token.Comment, token.Newline,
+		token.Identifier, token.LParen, token.RParen, token.Newline,
+		token.Dedent, token.Dedent, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}
+
+// The lookahead skips the rest of the comment line and any blank line between
+// the comment and the code, with either line ending.
+func TestLexCommentLookaheadSkipsBlankCarriageReturnLines(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\r\n\tif true:\r\n\t\tpass\r\n\t# c\r\n\r\n\t\tprint()\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.If, token.True, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline,
+		token.Comment, token.Newline,
+		// The blank line between the comment and the code ends with a newline
+		// of its own, as a blank line does anywhere.
+		token.Newline,
+		token.Identifier, token.LParen, token.RParen, token.Newline,
+		token.Dedent, token.Dedent, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}
+
+func TestLexCommentStaysInsideTheInnerLambdaBody(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var x = [func():\n\t\tvar y = [func():\n\t\t\t\tpass\n\t\t# c\n\t\t]\n]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the comma or bracket that ends a lambda body may leave it, so the
+	// comment below the inner body's level keeps that body open.
+	var kinds []token.Type
+	var firstDedent, comment int
+	for index, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+		if tok.Type == token.Dedent && firstDedent == 0 {
+			firstDedent = index
+		}
+		if tok.Type == token.Comment {
+			comment = index
+		}
+	}
+	if comment == 0 {
+		t.Fatalf("no comment token: %v", kinds)
+	}
+	if firstDedent < comment {
+		t.Fatalf("the inner body closed before its comment: %v", kinds)
+	}
+}
+
+// A run of comment-only lines shares one lookahead for the line of code that
+// follows it, so lexing stays linear in the length of the run. Rescanning per
+// line made a file of this size take minutes. The budget is far above the
+// measured cost because this guards an order of growth, not a constant.
+func TestLexLongCommentRunStaysLinear(t *testing.T) {
+	const lines = 200000
+	source := bytes.Repeat([]byte("# c\n"), lines)
+	start := time.Now()
+	tokens, err := lexer.Lex(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("lexing %d comment-only lines took %v", lines, elapsed)
+	}
+	// Every line contributes its comment and its newline, and the file ends
+	// with EOF.
+	if want := lines*2 + 1; len(tokens) != want {
+		t.Fatalf("got %d tokens, want %d", len(tokens), want)
 	}
 }

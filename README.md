@@ -221,6 +221,14 @@ structure and comments, but it may normalize indentation, spacing, parentheses,
 blank lines, and literal spelling. If exact source trivia is required, retain
 the original source alongside the AST.
 
+A comment written on a line of its own neither opens nor closes a block, which
+is how Godot's tokenizer treats it. Its indentation only chooses the block it
+belongs to, and the next line of code settles that: a comment written at an
+outer level still closes the blocks the code below it has left, but when that
+code stays inside a deeper block the comment belongs there too, whatever its
+own indentation. A comment indented to a level matching no block keeps the
+scope of the nearest block above it rather than failing to parse.
+
 Statements also record the formatting-relevant context the source gave them:
 
 - `ast.Trivia` holds the blank lines written before a statement and the comment
