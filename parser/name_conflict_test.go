@@ -50,6 +50,23 @@ func TestNameDeclaredTwiceInOneScope(t *testing.T) {
 			`there is already a variable named "TEST"`,
 		},
 		{
+			// A parameter may shadow a name outside the lambda, and a local of
+			// the body then meets the parameter.
+			"a local in a lambda over the lambda's parameter",
+			"func f(a):\n\tvar g := func(a):\n\t\tvar a = 2\n",
+			`there is already a parameter named "a"`,
+		},
+		{
+			"a parameter twice in one function",
+			"func f(a, a):\n\tpass\n",
+			`there is already a parameter named "a"`,
+		},
+		{
+			"a parameter twice in one lambda",
+			"func f():\n\tvar g := func(a, a): return a\n",
+			`there is already a parameter named "a"`,
+		},
+		{
 			"a member over an earlier member",
 			"func test():\n\tpass\n\nvar test = 25\n",
 			`variable "test" has the same name as a previously declared function`,
@@ -97,6 +114,15 @@ func TestNameReusedWhereGodotAllowsIt(t *testing.T) {
 		"enum { A }\nenum { B }\n",
 		// A getter and a setter each open a scope of their own.
 		"var x: int = 1:\n\tget:\n\t\tvar v = 1\n\t\treturn v\n\tset(value):\n\t\tvar v = value\n\t\tprint(v)\n",
+		// A parameter is held only against the others of its own list, so a
+		// lambda's may carry the name of a parameter of the function around it,
+		"func outer(x):\n\tvar callback = func(x): return x\n\treturn callback\n",
+		// or of a local,
+		"func outer():\n\tvar x = 1\n\tvar callback = func(x): return x\n\treturn callback.call(x)\n",
+		// or of a loop variable,
+		"func outer():\n\tfor i in 2:\n\t\tvar g = func(i): return i\n\t\tprint(g)\n",
+		// or of a parameter of the lambda around it.
+		"func outer():\n\tvar g = func(x): return func(x): return x\n\treturn g\n",
 	} {
 		if _, err := parser.Parse("scope.gd", []byte(source)); err != nil {
 			t.Errorf("parse %q: %v", source, err)

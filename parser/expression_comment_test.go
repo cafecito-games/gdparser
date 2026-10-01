@@ -31,6 +31,21 @@ func TestCommentWhereTheExpressionGrammarHasNoPlace(t *testing.T) {
 			"func f(a):\n\tvar x = 1 if a else 2\n\t# c\n",
 		},
 		{
+			"before a grouping's closing parenthesis",
+			"func f(a, b):\n\tvar r = b and (a  # note\n\t)\n\treturn r\n",
+			"func f(a, b):\n\tvar r = b and a\n\t# note\n\treturn r\n",
+		},
+		{
+			"on a line of its own before a grouping's closing parenthesis",
+			"func f(a, b):\n\tvar r = (a + b) * (a\n\t\t# note\n\t)\n",
+			"func f(a, b):\n\tvar r = (a + b) * a\n\t# note\n",
+		},
+		{
+			"before a subscript's closing bracket",
+			"func f(a):\n\tvar x = a[0  # c\n\t]\n",
+			"func f(a):\n\tvar x = a[0]\n\t# c\n",
+		},
+		{
 			// A header's comment opens the block the header introduces, which is
 			// where a comment ending the header's own line already goes.
 			"inside a parameter's default value",

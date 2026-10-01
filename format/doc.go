@@ -16,7 +16,14 @@ type docConcat struct{ parts []doc }
 
 // docGroup emits its contents on one line when they fit in the remaining
 // budget, and otherwise takes every break directly inside it.
-type docGroup struct{ inner doc }
+type docGroup struct {
+	inner doc
+	// yielding says the group is measured only as far as the next place the line
+	// could break after it, rather than as far as the line must run if nothing
+	// after it breaks. A yielding group so stays on one line when it fits there
+	// itself, and leaves a break still needed to a group that follows it.
+	yielding bool
+}
 
 // docNest adds indentation levels to the breaks inside it.
 type docNest struct {
@@ -110,6 +117,8 @@ func endsWithLineComment(d doc) bool {
 
 func group(inner doc) doc { return docGroup{inner: inner} }
 
+func yieldingGroup(inner doc) doc { return docGroup{inner: inner, yielding: true} }
+
 func nest(levels int, inner doc) doc { return docNest{levels: levels, inner: inner} }
 
 func ifBroken(broken, flat doc) doc { return docIfBreak{broken: broken, flat: flat} }
@@ -135,7 +144,7 @@ type command struct {
 
 // render lays out document within the option's column budget.
 func render(document doc, options Options) string {
-	var builder strings.Builder
+	var output []byte
 	column := 0
 	stack := []command{{mode: modeBreak, doc: document}}
 	for len(stack) > 0 {
@@ -143,7 +152,7 @@ func render(document doc, options Options) string {
 		stack = stack[:len(stack)-1]
 		switch node := current.doc.(type) {
 		case docText:
-			builder.WriteString(node.text)
+			output = append(output, node.text...)
 			if index := strings.LastIndexByte(node.text, '\n'); index >= 0 {
 				column = textWidth(node.text[index+1:], options)
 			} else {
@@ -157,7 +166,7 @@ func render(document doc, options Options) string {
 			stack = append(stack, command{indent: current.indent + node.levels, mode: current.mode, doc: node.inner})
 		case docGroup:
 			flat := command{indent: current.indent, mode: modeFlat, doc: node.inner}
-			if current.mode == modeFlat || fits(flat, stack, options.LineWidth-column, options) {
+			if current.mode == modeFlat || fits(flat, stack, options.LineWidth-column, node.yielding, options) {
 				stack = append(stack, flat)
 				continue
 			}
@@ -171,30 +180,35 @@ func render(document doc, options Options) string {
 		case docLine:
 			if current.mode == modeFlat && node.kind != lineHard {
 				if node.kind == lineSpace {
-					builder.WriteByte(' ')
+					output = append(output, ' ')
 					column++
 				}
 				continue
 			}
-			builder.WriteByte('\n')
-			builder.WriteString(strings.Repeat(options.indentUnit(), current.indent))
+			output = append(trimTrailingSpace(output), '\n')
+			output = append(output, strings.Repeat(options.indentUnit(), current.indent)...)
 			column = current.indent * options.indentColumns()
 		}
 	}
-	return trimTrailingSpace(builder.String())
+	return string(trimTrailingSpace(output))
 }
 
 // fits reports whether next, followed by the already-queued rest, reaches a
-// break or ends within width columns.
-func fits(next command, rest []command, width int, options Options) bool {
+// break or ends within width columns. A group in the rest is taken to stay on
+// one line, unless yielding says that a group free to break counts as a break.
+func fits(next command, rest []command, width int, yielding bool, options Options) bool {
 	remaining := width
 	stack := []command{next}
 	restIndex := len(rest)
+	// inRest reports that next has been measured in full, so that everything
+	// still to measure comes after it.
+	inRest := false
 	for remaining >= 0 {
 		if len(stack) == 0 {
 			if restIndex == 0 {
 				return true
 			}
+			inRest = true
 			restIndex--
 			stack = append(stack, rest[restIndex])
 			continue
@@ -216,7 +230,11 @@ func fits(next command, rest []command, width int, options Options) bool {
 		case docNest:
 			stack = append(stack, command{indent: current.indent + node.levels, mode: current.mode, doc: node.inner})
 		case docGroup:
-			stack = append(stack, command{indent: current.indent, mode: modeFlat, doc: node.inner})
+			mode := modeFlat
+			if yielding && inRest {
+				mode = current.mode
+			}
+			stack = append(stack, command{indent: current.indent, mode: mode, doc: node.inner})
 		case docIfBreak:
 			chosen := node.flat
 			if current.mode == modeBreak {
@@ -251,12 +269,14 @@ func textWidth(value string, options Options) int {
 	return width
 }
 
-// trimTrailingSpace removes trailing tabs and spaces from every line, so that
-// an indented blank line does not carry whitespace.
-func trimTrailingSpace(value string) string {
-	lines := strings.Split(value, "\n")
-	for index, line := range lines {
-		lines[index] = strings.TrimRight(line, " \t")
+// trimTrailingSpace removes the tabs and spaces that end output, which is done
+// wherever the renderer ends a line, so that an indented blank line carries no
+// whitespace. A line break inside a literal is not the renderer's, so whitespace
+// before one is part of the literal's value and is never looked at.
+func trimTrailingSpace(output []byte) []byte {
+	end := len(output)
+	for end > 0 && (output[end-1] == ' ' || output[end-1] == '\t') {
+		end--
 	}
-	return strings.Join(lines, "\n")
+	return output[:end]
 }

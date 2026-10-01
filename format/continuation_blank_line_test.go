@@ -21,17 +21,17 @@ func TestABlankLineBeforeAContinuationKeywordStaysOut(t *testing.T) {
 		{
 			name:   "else with a trailing comment",
 			source: "func f(x):\n\tif x:\n\t\tpass\n\n\telse:  # c\n\t\tpass\n",
-			want:   "func f(x):\n\tif x:\n\t\tpass\n\telse:\n\t\t# c\n\t\tpass\n",
+			want:   "func f(x):\n\tif x:\n\t\tpass\n\telse:  # c\n\t\tpass\n",
 		},
 		{
 			name:   "elif with a trailing comment",
 			source: "func f(x):\n\tif x:\n\t\tpass\n\n\telif x:  # c\n\t\tpass\n",
-			want:   "func f(x):\n\tif x:\n\t\tpass\n\telif x:\n\t\t# c\n\t\tpass\n",
+			want:   "func f(x):\n\tif x:\n\t\tpass\n\telif x:  # c\n\t\tpass\n",
 		},
 		{
 			name:   "several blank lines and a deeper block",
 			source: "func f(x):\n\tif x:\n\t\tfor i in []:\n\t\t\tprint(i)\n\n\n\telse:  # c\n\t\tpass\n",
-			want:   "func f(x):\n\tif x:\n\t\tfor i in []:\n\t\t\tprint(i)\n\telse:\n\t\t# c\n\t\tpass\n",
+			want:   "func f(x):\n\tif x:\n\t\tfor i in []:\n\t\t\tprint(i)\n\telse:  # c\n\t\tpass\n",
 		},
 		{
 			// A blank line written after the colon is inside the block, and the

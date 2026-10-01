@@ -54,6 +54,9 @@ func nodeLabel(node Node) string {
 	case *Literal:
 		return " " + n.Raw
 	case *Comment:
+		if n.TrailsHeader {
+			return " " + n.Text + " (trails header)"
+		}
 		return " " + n.Text
 	case *Annotation:
 		return " @" + n.Name

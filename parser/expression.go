@@ -157,6 +157,8 @@ func (p *parser) parsePrefix() (ast.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A comment may push the closing parenthesis onto the next line.
+		p.takeStrayComments()
 		p.popMultiline()
 		if _, err := p.expect(token.RParen, "expected ')' after expression"); err != nil {
 			return nil, err
@@ -266,6 +268,7 @@ func (p *parser) parsePostfix(expr ast.Expression) (ast.Expression, error) {
 			if err != nil {
 				return nil, err
 			}
+			p.takeStrayComments()
 			p.popMultiline()
 			end, err := p.expect(token.RBracket, "expected ']' after subscript")
 			if err != nil {
@@ -331,8 +334,9 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		name, nameSpan = named.Lexeme, named.Span
 	}
 	// A lambda body does see the locals around it, so its scope is no barrier:
-	// Godot gives its suite the enclosing block as a parent, which is why a body
-	// cannot reuse a name from the function holding it.
+	// Godot gives its suite the enclosing block as a parent, which is why a local
+	// of the body cannot reuse a name from the function holding it. A parameter
+	// can, because parameters are only held against each other.
 	p.pushScope(false)
 	defer p.popScope()
 	parameters, parameterComments, err := p.parseParameters(true)

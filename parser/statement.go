@@ -524,7 +524,21 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 				parameter.VariadicSpan = rest.Span
 				parameter.SourceSpan.Start = rest.Span.Start
 			}
-			if p.match(token.Colon) {
+			// "a: = 1" leaves the type to the default, exactly as ":=" does: Godot
+			// has no ":=" token and reads the colon and the "=" separately.
+			// A comment may break the line between the two.
+			inferred := false
+			if p.at(token.Colon) {
+				offset := 1
+				for p.peekN(offset).Type == token.Comment {
+					offset++
+				}
+				inferred = p.peekN(offset).Type == token.Assign
+			}
+			if inferred {
+				p.advance()
+				p.takeCollectionComments(&interrupting, 0)
+			} else if p.match(token.Colon) {
 				p.takeCollectionComments(&interrupting, 0)
 				parameter.Type, parameter.TypeSpan, err = p.parseType(false, &interrupting, 0)
 				if err != nil {
@@ -544,6 +558,7 @@ func (p *parser) parseParameters(variadic bool) ([]ast.Parameter, []ast.Collecti
 					return nil, nil, p.error(operator, "a rest parameter cannot have a default value")
 				}
 				parameter.DefaultOperatorSpan = operator.Span
+				parameter.Inferred = inferred || operator.Type == token.InferAssign
 				parameter.Default, err = p.parseExpression(ast.PrecedenceAssignment)
 				if err != nil {
 					return nil, nil, err

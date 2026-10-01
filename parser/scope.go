@@ -28,7 +28,7 @@ type scope struct {
 	// barrier marks a scope no lookup passes out of. Godot leaves a function
 	// body's suite with no parent block, so a function cannot see the locals of
 	// whatever encloses it, while a lambda body's suite does have one and so
-	// cannot reuse a name from the function holding it.
+	// cannot declare a local under a name from the function holding it.
 	barrier bool
 }
 
@@ -72,13 +72,22 @@ func (p *parser) lookupLocal(name string) (string, bool) {
 
 // declareParameters records a parameter list in the scope the body will be read
 // in, which is where Godot puts them: parse_function_signature adds each one to
-// the suite it is about to parse.
+// the suite it is about to parse. It holds a parameter only against the others of
+// its own list, through the function's parameters_indices, and adds it to the
+// suite unchecked, so a lambda's parameter may carry a name the function around
+// it already uses. The scope is the one just opened for the function, which holds
+// nothing but the parameters read so far.
 func (p *parser) declareParameters(parameters []ast.Parameter) error {
+	if len(p.scopes) == 0 {
+		return nil
+	}
+	own := p.scopes[len(p.scopes)-1].kinds
 	for _, parameter := range parameters {
-		name := token.Token{Type: token.Identifier, Lexeme: parameter.Name, Span: parameter.NameSpan}
-		if err := p.declareLocal(name, parameterName); err != nil {
-			return err
+		if _, ok := own[parameter.Name]; ok {
+			name := token.Token{Type: token.Identifier, Lexeme: parameter.Name, Span: parameter.NameSpan}
+			return p.error(name, fmt.Sprintf("there is already a %s named %q in this scope", parameterName, parameter.Name))
 		}
+		own[parameter.Name] = parameterName
 	}
 	return nil
 }
