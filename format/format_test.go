@@ -746,3 +746,48 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 		})
 	}
 }
+
+// A file with carriage-return line endings formats without carrying one into
+// the output, whose lines end with a line feed alone.
+func TestCarriageReturnsLeaveNoTraceInAComment(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"a trailing comment", "var a = 1  # c\r\nvar b = 2\r\n", "var a = 1  # c\nvar b = 2\n"},
+		{"a comment on its own line", "func a():\r\n\t# c\r\n\tpass\r\n", "func a():\n\t# c\n\tpass\n"},
+		{"a comment ending the file", "var a = 1  # c\r\n", "var a = 1  # c\n"},
+		// Godot 4.7.2 accepts a file whose last byte is the carriage return of
+		// its final line, so the comment must not keep it.
+		{"a carriage return as the last byte", "var a = 1  # c\r", "var a = 1  # c\n"},
+		{"a comment-only line ending the file", "# c\r", "# c\n"},
+		// Godot accepts a run of carriage returns inside comment text, so the
+		// whole run at the end of a line has to go, not just the last one.
+		{"a run of carriage returns", "var a = 1  # c\r\r\nvar b = 2\n", "var a = 1  # c\nvar b = 2\n"},
+		{"a run ending the file", "var a = 1  # c\r\r", "var a = 1  # c\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("crlf.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+			if strings.ContainsRune(formatted, '\r') {
+				t.Errorf("formatted source carries a carriage return: %q", formatted)
+			}
+			// Dropping the carriage return must settle in one pass rather than
+			// taking a second format to converge.
+			again, err := parser.Parse("crlf.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("reparse: %v", err)
+			}
+			if second := format.File(again); second != formatted {
+				t.Errorf("formatting is not idempotent: %q then %q", formatted, second)
+			}
+		})
+	}
+}

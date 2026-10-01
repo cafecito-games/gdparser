@@ -370,3 +370,61 @@ func TestLexEllipsis(t *testing.T) {
 		t.Fatalf("tokens 4 and 5 = %s %s, want . .", pair[4].Type, pair[5].Type)
 	}
 }
+
+// A comment's text ends with the line, not with the carriage return that ends
+// it, so its span covers the text and nothing more.
+func TestLexCommentExcludesACarriageReturn(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var a = 1  # c\r\nvar b = 2\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var comment *token.Token
+	for index := range tokens {
+		if tokens[index].Type == token.Comment {
+			comment = &tokens[index]
+			break
+		}
+	}
+	if comment == nil {
+		t.Fatal("no comment token")
+	}
+	if comment.Lexeme != "# c" {
+		t.Errorf("lexeme = %q, want %q", comment.Lexeme, "# c")
+	}
+	if comment.Span.End.Offset != 14 {
+		t.Errorf("span end offset = %d, want 14, before the carriage return", comment.Span.End.Offset)
+	}
+	if comment.Span.End.Column != 15 {
+		t.Errorf("span end column = %d, want 15", comment.Span.End.Column)
+	}
+	// A carriage return that is the file's last byte ends the line too.
+	atEnd, err := lexer.Lex([]byte("var a = 1  # c\r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range atEnd {
+		if tok.Type == token.Comment && tok.Lexeme != "# c" {
+			t.Errorf("carriage return at end of file: lexeme = %q, want %q", tok.Lexeme, "# c")
+		}
+	}
+	// A run of carriage returns at the end of a line ends the comment too.
+	run, err := lexer.Lex([]byte("var a = 1  # c\r\r\nvar b = 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range run {
+		if tok.Type == token.Comment && tok.Lexeme != "# c" {
+			t.Errorf("run of carriage returns: lexeme = %q, want %q", tok.Lexeme, "# c")
+		}
+	}
+	// A carriage return that does not end a line stays part of the comment.
+	lone, err := lexer.Lex([]byte("var a = 1  # x\ry\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range lone {
+		if tok.Type == token.Comment && tok.Lexeme != "# x\ry" {
+			t.Errorf("lone carriage return: lexeme = %q, want %q", tok.Lexeme, "# x\ry")
+		}
+	}
+}
