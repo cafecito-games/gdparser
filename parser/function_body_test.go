@@ -63,15 +63,24 @@ func TestFunctionBodyHoldsCode(t *testing.T) {
 // survives as a dedent that reaches the "Expected end of file" check at the end
 // of parse_program.
 func TestClassMemberKeywordEndsALambdaBody(t *testing.T) {
-	for _, test := range []struct{ name, source string }{
-		{"in a class body", "class A:\n\tvar f = func():\n\t\tsignal s\n"},
-		{"in a class body, as a static variable", "class A:\n\tvar f = func():\n\t\tstatic var u = 2\n"},
-		{"in a function body", "func f():\n\tvar x = func():\n\t\tsignal s\n"},
-		{"in a function body, on one line", "func f():\n\tvar x = func(): signal s\n"},
+	// A want of "" asks only that the script be rejected. The two class-body
+	// shapes are rejected for leaving a block unclosed rather than by the rule
+	// itself, and which leftover token is reported is this parser's own
+	// recovery rather than anything the grammar fixes, so pinning the message
+	// there would pin an implementation detail.
+	for _, test := range []struct{ name, source, want string }{
+		{"in a class body", "class A:\n\tvar f = func():\n\t\tsignal s\n", ""},
+		{"in a class body, as a static variable", "class A:\n\tvar f = func():\n\t\tstatic var u = 2\n", ""},
+		{"in a function body", "func f():\n\tvar x = func():\n\t\tsignal s\n", "in a function body"},
+		{"in a function body, on one line", "func f():\n\tvar x = func(): signal s\n", "in a function body"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := parser.Parse("lambda.gd", []byte(test.source)); err == nil {
+			_, err := parser.Parse("lambda.gd", []byte(test.source))
+			if err == nil {
 				t.Fatal("expected a parse error")
+			}
+			if test.want != "" && !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error does not name the rule: %v", err)
 			}
 		})
 	}
