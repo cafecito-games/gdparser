@@ -30,7 +30,9 @@ var byteOrderMark = []byte{0xef, 0xbb, 0xbf}
 func Lex(source []byte) ([]token.Token, error) {
 	l := newLexer(source)
 	l.tracksBrackets = true
-	var tokens []token.Token
+	// Source averages a handful of bytes per token, so this is close enough to
+	// scan a file without growing the slice more than once or twice.
+	tokens := make([]token.Token, 0, len(source)/4+8)
 	for !l.finished {
 		tok, err := l.next()
 		if err != nil {
@@ -144,8 +146,10 @@ type lexer struct {
 	// are open, innermost last.
 	blocks [][]int
 	// pending holds tokens produced but not yet handed out, such as the rest of
-	// a run of dedents.
-	pending []token.Token
+	// a run of dedents, and pendingAt is how many of them have been. The buffer is
+	// reused rather than resliced, so a file's scan allocates it once.
+	pending   []token.Token
+	pendingAt int
 	// continued holds the comments written on the continuation lines of the
 	// logical line being scanned. They sit in the middle of a statement, where
 	// nothing can carry them, so they are held until the line ends.
@@ -192,13 +196,14 @@ func (l *lexer) popIndent() {
 
 // next returns the next token, reading source until one is produced.
 func (l *lexer) next() (token.Token, error) {
-	for len(l.pending) == 0 {
+	for l.pendingAt == len(l.pending) {
+		l.pending, l.pendingAt = l.pending[:0], 0
 		if err := l.step(); err != nil {
 			return token.Token{}, err
 		}
 	}
-	tok := l.pending[0]
-	l.pending = l.pending[1:]
+	tok := l.pending[l.pendingAt]
+	l.pendingAt++
 	if tok.Type == token.EOF {
 		l.finished = true
 	}
@@ -470,6 +475,7 @@ func (l *lexer) scanContinuation() {
 		l.scanComment(start)
 		l.continued = append(l.continued, l.pending[len(l.pending)-1])
 		l.pending = l.pending[:len(l.pending)-1]
+		l.lastType = token.Newline
 		if l.peek() == '\n' {
 			l.advance()
 		}
@@ -485,7 +491,7 @@ func (l *lexer) flushContinuationComments() {
 	}
 	l.pending = append(l.pending, l.continued...)
 	l.lastType = l.continued[len(l.continued)-1].Type
-	l.continued = nil
+	l.continued = l.continued[:0]
 }
 
 func (l *lexer) scanIdentifier(start token.Position) {

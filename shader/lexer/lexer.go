@@ -60,6 +60,30 @@ func (l *lexer) fail(pos token.Position, format string, args ...any) error {
 	return &token.Error{Filename: l.filename, Position: pos, Message: fmt.Sprintf(format, args...)}
 }
 
+// scanToLineEnd advances to the end of the line, stopping before the carriage
+// returns that run to it. A carriage return there ends the line rather than
+// belonging to the text, whether the line ends with a line feed or with the file;
+// keeping one would carry it into output whose other lines end with a line feed
+// alone.
+func (l *lexer) scanToLineEnd() {
+	for l.offset < len(l.source) && l.peek(0) != '\n' {
+		if l.peek(0) == '\r' {
+			run := 0
+			for l.peek(run) == '\r' {
+				run++
+			}
+			if l.offset+run >= len(l.source) || l.peek(run) == '\n' {
+				return
+			}
+			for range run {
+				l.advance()
+			}
+			continue
+		}
+		l.advance()
+	}
+}
+
 func (l *lexer) lex() ([]token.Token, error) {
 	for l.offset < len(l.source) {
 		b := l.peek(0)
@@ -70,9 +94,7 @@ func (l *lexer) lex() ([]token.Token, error) {
 		start := l.pos()
 		if b == '#' && l.lineStart {
 			for {
-				for l.offset < len(l.source) && l.peek(0) != '\n' {
-					l.advance()
-				}
+				l.scanToLineEnd()
 				if l.offset >= len(l.source) {
 					break
 				}
@@ -83,6 +105,9 @@ func (l *lexer) lex() ([]token.Token, error) {
 				if i < start.Offset || l.source[i] != '\\' {
 					break
 				}
+				for l.offset < len(l.source) && l.peek(0) != '\n' {
+					l.advance()
+				}
 				l.advance()
 			}
 			l.emit(token.Directive, start)
@@ -91,9 +116,7 @@ func (l *lexer) lex() ([]token.Token, error) {
 		if b == '/' && l.peek(1) == '/' {
 			l.advance()
 			l.advance()
-			for l.offset < len(l.source) && l.peek(0) != '\n' {
-				l.advance()
-			}
+			l.scanToLineEnd()
 			l.emit(token.Comment, start)
 			continue
 		}

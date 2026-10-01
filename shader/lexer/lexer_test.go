@@ -1,6 +1,7 @@
 package lexer
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cafecito-games/gdparser/shader/token"
@@ -25,5 +26,28 @@ func TestCommentsDirectivesAndPositions(t *testing.T) {
 func TestUnterminatedBlockComment(t *testing.T) {
 	if _, err := Lex("bad.gdshader", []byte("/* no")); err == nil {
 		t.Fatal("expected lexical error")
+	}
+}
+
+// A carriage return at the end of a line ends the line rather than belonging to
+// the text before it, so a comment or a directive read from a CRLF file carries
+// none into output whose other lines end with a line feed alone.
+func TestCommentAndDirectiveExcludeACarriageReturn(t *testing.T) {
+	tokens, err := Lex("t.gdshader", []byte("#define X 1\r\n// a comment\r\nvoid f() {}\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range tokens {
+		if strings.Contains(tok.Text, "\r") {
+			t.Errorf("token %s holds a carriage return: %q", tok.Kind, tok.Text)
+		}
+	}
+	// A comment that runs to the end of the file is no different.
+	last, err := Lex("t.gdshader", []byte("// a comment\r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last[0].Text != "// a comment" {
+		t.Errorf("comment = %q, want %q", last[0].Text, "// a comment")
 	}
 }
