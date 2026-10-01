@@ -522,7 +522,13 @@ func (p *printer) parameter(parameter ast.Parameter) doc {
 func (p *printer) logicalChain(binary *ast.BinaryExpression, parenthesize bool) doc {
 	body := nest(2, concat(softLine, concat(p.logicalParts(binary)...)))
 	if parenthesize {
+		if endsWithLineComment(body) {
+			return group(concat(text("("), body, hardLine, text(")")))
+		}
 		return group(concat(text("("), body, softLine, text(")")))
+	}
+	if endsWithLineComment(body) {
+		return group(concat(ifBroken(text("("), text("")), body, hardLine, ifBroken(text(")"), text(""))))
 	}
 	return group(concat(
 		ifBroken(text("("), text("")),
@@ -617,9 +623,13 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		return concat(p.expression(node.Callee, 12), p.collection(argumentLayout, arguments, node.Comments))
 	case *ast.MemberExpression:
-		return concat(p.expression(node.Object, 12), text("."+node.Property))
+		return closeAfter(p.expression(node.Object, 12), "."+node.Property)
 	case *ast.SubscriptExpression:
-		return concat(p.expression(node.Object, 12), text("["), p.expression(node.Index, 0), text("]"))
+		return concat(
+			p.expression(node.Object, 12),
+			text("["),
+			closeAfter(p.expression(node.Index, 0), "]"),
+		)
 	case *ast.ArrayLiteral:
 		elements := make([]doc, len(node.Elements))
 		for index, element := range node.Elements {
@@ -712,7 +722,19 @@ func (p *printer) inlineStatement(statement ast.Statement) doc {
 	}
 }
 
-func parenthesized(inner doc) doc { return group(concat(text("("), inner, text(")"))) }
+func parenthesized(inner doc) doc {
+	return group(concat(text("("), closeAfter(inner, ")")))
+}
+
+// closeAfter appends a closing token to inner, on the next line when inner ends
+// in a comment. A comment holds the rest of its line, so a token written after
+// one on the same line is commented out.
+func closeAfter(inner doc, closing string) doc {
+	if endsWithLineComment(inner) {
+		return concat(inner, hardLine, text(closing))
+	}
+	return concat(inner, text(closing))
+}
 
 func isLogicalOperator(operator string) bool {
 	switch operator {

@@ -530,6 +530,26 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 			source: "var d = {\"k\": func(): return 1  # c\n}\n",
 			want:   "var d = {\n\t\"k\": func(): return 1  # c\n}\n",
 		},
+		{
+			name:   "a subscript index",
+			source: "var x = {}\nvar y = x[func(): return 1  # c\n]\n",
+			want:   "var x = {}\nvar y = x[func(): return 1  # c\n]\n",
+		},
+		{
+			name:   "a ternary's alternative, which takes parentheses",
+			source: "var b = true\nvar y = 1 if b else func(): return 1  # c\n",
+			want:   "var b = true\nvar y = 1 if b else (func(): return 1  # c\n)\n",
+		},
+		{
+			name:   "an await operand, which takes parentheses",
+			source: "var f = await func(): return 1  # c\n",
+			want:   "var f = await (func(): return 1  # c\n)\n",
+		},
+		{
+			name:   "a member access on a parenthesized lambda",
+			source: "var y = (func(): return 1  # c\n).call()\n",
+			want:   "var y = (func(): return 1  # c\n).call()\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.Parse("inline.gd", []byte(test.source))
