@@ -206,22 +206,34 @@ func (p *printer) statementBody(statement ast.Statement) doc {
 				parts = append(parts, hardLine)
 				keyword = "elif "
 			}
-			parts = append(parts, text(keyword), p.expression(branch.Condition, 0), text(":"), p.suite(branch.Body))
+			parts = append(parts,
+				text(keyword),
+				closeAfter(p.headerExpression(branch.Condition), ":"),
+				p.suite(branch.Body),
+			)
 		}
 		if node.Else != nil {
 			parts = append(parts, hardLine, text("else:"), p.suite(node.Else))
 		}
 		return concat(parts...)
 	case *ast.WhileStatement:
-		return concat(text("while "), p.expression(node.Condition, 0), text(":"), p.suite(node.Body))
+		return concat(
+			text("while "),
+			closeAfter(p.headerExpression(node.Condition), ":"),
+			p.suite(node.Body),
+		)
 	case *ast.ForStatement:
 		variable := node.Variable
 		if node.Type != "" {
 			variable += ": " + node.Type
 		}
-		return concat(text("for "+variable+" in "), p.expression(node.Iterable, 0), text(":"), p.suite(node.Body))
+		return concat(
+			text("for "+variable+" in "),
+			closeAfter(p.headerExpression(node.Iterable), ":"),
+			p.suite(node.Body),
+		)
 	case *ast.MatchStatement:
-		parts := []doc{text("match "), p.expression(node.Value, 0), text(":")}
+		parts := []doc{text("match "), closeAfter(p.headerExpression(node.Value), ":")}
 		// A comment that ended the "match" line stays on it.
 		for _, comment := range ast.CollectionCommentsAt(node.Comments, 0, true) {
 			parts = append(parts, text("  "+p.commentText(comment)))
@@ -274,6 +286,12 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 	header := concat(parts...)
 	if node.Getter == nil && node.Setter == nil {
 		return header
+	}
+	// The accessor block's colon follows the initializer, so an initializer
+	// ending in a comment is parenthesized to give the colon its own line.
+	if endsWithLineComment(header) && node.Value != nil {
+		parts[len(parts)-1] = parenthesized(p.expression(node.Value, 0))
+		header = concat(parts...)
 	}
 	var accessors []doc
 	// A comment that ended the colon's line stays on it.
@@ -643,7 +661,10 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		entries := make([]doc, len(node.Entries))
 		for index, entry := range node.Entries {
-			entries[index] = concat(p.expression(entry.Key, 0), text(separator), p.expression(entry.Value, 0))
+			entries[index] = concat(
+				closeAfter(p.headerExpression(entry.Key), separator),
+				p.expression(entry.Value, 0),
+			)
 		}
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.BindingPattern:
@@ -724,6 +745,19 @@ func (p *printer) inlineStatement(statement ast.Statement) doc {
 
 func parenthesized(inner doc) doc {
 	return group(concat(text("("), closeAfter(inner, ")")))
+}
+
+// headerExpression renders an expression that a mandatory token follows, such
+// as the colon of a statement header or of a dictionary entry. A comment holds
+// the rest of its line, so an expression ending in one is parenthesized, which
+// gives the token a line of its own to land on and keeps the expression
+// readable to the parser as well as to the engine.
+func (p *printer) headerExpression(expr ast.Expression) doc {
+	rendered := p.expression(expr, 0)
+	if endsWithLineComment(rendered) {
+		return parenthesized(rendered)
+	}
+	return rendered
 }
 
 // closeAfter appends a closing token to inner, on the next line when inner ends

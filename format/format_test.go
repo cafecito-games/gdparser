@@ -546,6 +546,31 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 			want:   "var f = await (func(): return 1  # c\n)\n",
 		},
 		{
+			name:   "an if condition, whose colon follows it",
+			source: "func w():\n\tif (func(): return 1  # c\n\t):\n\t\tpass\n",
+			want:   "func w():\n\tif (func(): return 1  # c\n\t):\n\t\tpass\n",
+		},
+		{
+			name:   "a while condition",
+			source: "func w():\n\twhile (func(): return 1  # c\n\t):\n\t\tpass\n",
+			want:   "func w():\n\twhile (func(): return 1  # c\n\t):\n\t\tpass\n",
+		},
+		{
+			name:   "a match value",
+			source: "func w():\n\tmatch (func(): return 1  # c\n\t):\n\t\t1:\n\t\t\tpass\n",
+			want:   "func w():\n\tmatch (func(): return 1  # c\n\t):\n\t\t1:\n\t\t\tpass\n",
+		},
+		{
+			name:   "a dictionary key, whose separator follows it",
+			source: "var d = {(func(): return 1  # c\n): 2}\n",
+			want:   "var d = {\n\t(func(): return 1  # c\n\t): 2,\n}\n",
+		},
+		{
+			name:   "an initializer an accessor block follows",
+			source: "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
+			want:   "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
+		},
+		{
 			name:   "a member access on a parenthesized lambda",
 			source: "var y = (func(): return 1  # c\n).call()\n",
 			want:   "var y = (func(): return 1  # c\n).call()\n",
@@ -568,6 +593,28 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
 			}
 		})
+	}
+}
+
+// A block lambda in a statement header keeps its parentheses, so the statement
+// after it stays the statement's own rather than becoming the lambda's.
+func TestBlockLambdaInAHeaderKeepsItsParentheses(t *testing.T) {
+	source := "func w():\n\tif (func():\n\t\t\t\treturn 1\n\t\t\t\t# c\n\t):\n\t\tpass\n"
+	file, err := parser.Parse("header.gd", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := format.File(file)
+	again, err := parser.Parse("header.gd", []byte(formatted))
+	if err != nil {
+		t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+	}
+	branch := again.Statements[0].(*ast.FunctionDeclaration).Body[0].(*ast.IfStatement).Branches[0]
+	if len(branch.Body) != 1 {
+		t.Fatalf("the if body holds %d statements, want 1:\n%s", len(branch.Body), formatted)
+	}
+	if keyword, ok := branch.Body[0].(*ast.KeywordStatement); !ok || keyword.Keyword != "pass" {
+		t.Fatalf("the if body statement = %#v, want pass:\n%s", branch.Body[0], formatted)
 	}
 }
 
