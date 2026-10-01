@@ -186,3 +186,34 @@ func TestLexOwnLineCommaEndsALambdaBody(t *testing.T) {
 		t.Fatalf("got %d DEDENT tokens, want 1: %v", dedents, kinds)
 	}
 }
+
+func TestLexNestedLambdaLayoutsUnwindIndependently(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var x = [func():\n\t\tf(func():\n\t\t\t\tpass\n\t\t)\n\t\tpass\n]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The inner body closes with the parenthesis that ends it, and the outer
+	// body stays open for the statement that follows.
+	want := []token.Type{
+		token.Var, token.Identifier, token.Assign, token.LBracket,
+		token.Func, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.Identifier, token.LParen,
+		token.Func, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline, token.Dedent,
+		token.RParen, token.Newline,
+		token.Pass, token.Newline, token.Dedent,
+		token.RBracket, token.Newline, token.EOF,
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(kinds), len(want), kinds)
+	}
+	for i, typ := range want {
+		if kinds[i] != typ {
+			t.Fatalf("token %d: got %s, want %s: %v", i, kinds[i], typ, kinds)
+		}
+	}
+}

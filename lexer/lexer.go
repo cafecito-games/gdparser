@@ -44,22 +44,41 @@ func Lex(source []byte) ([]token.Token, error) {
 }
 
 type lexer struct {
-	source            []byte
-	offset            int
-	line              int
-	column            int
-	atStart           bool
-	depth             int
-	layoutDepth       int
-	layoutIndentDepth int
+	source  []byte
+	offset  int
+	line    int
+	column  int
+	atStart bool
+	depth   int
+	layouts []lambdaLayout
+	// lambdaHeaderDepth is the bracket depth of a lambda header being scanned,
+	// or zero when none is pending. A lambda header is only tracked inside
+	// brackets, so a real pending header always sits at a depth above zero.
 	lambdaHeaderDepth int
 	indents           []int
 	tokens            []token.Token
 }
 
+// lambdaLayout records one multiline lambda body that is still open. Lambdas
+// nest, so each body keeps its own state: the bracket depth its header closed
+// at, and the height of the indentation stack outside the body.
+type lambdaLayout struct {
+	depth       int
+	indentDepth int
+}
+
+// layoutDepth returns the bracket depth of the innermost open lambda body, or
+// zero when no body is open.
+func (l *lexer) layoutDepth() int {
+	if len(l.layouts) == 0 {
+		return 0
+	}
+	return l.layouts[len(l.layouts)-1].depth
+}
+
 func (l *lexer) run() error {
 	for !l.done() {
-		if l.atStart && l.depth == l.layoutDepth {
+		if l.atStart && l.depth == l.layoutDepth() {
 			if err := l.scanIndent(); err != nil {
 				return err
 			}
@@ -75,7 +94,7 @@ func (l *lexer) run() error {
 			l.advance()
 		case c == '\n':
 			l.advance()
-			if l.depth == l.layoutDepth {
+			if l.depth == l.layoutDepth() {
 				l.emit(token.Newline, "", start)
 			}
 			l.atStart = true
@@ -143,7 +162,7 @@ measured:
 		return nil
 	}
 	l.atStart = false
-	if l.layoutDepth > 0 && l.depth == l.layoutDepth && closesLambdaLayout(l.peek()) {
+	if len(l.layouts) > 0 && l.depth == l.layoutDepth() && closesLambdaLayout(l.peek()) {
 		// A comma or closing bracket on its own line ends the lambda body
 		// rather than continuing it, so endLambdaLayout unwinds the
 		// indentation stack when the token itself is scanned. Measuring this
@@ -210,7 +229,7 @@ func (l *lexer) scanIdentifier(start token.Position) {
 	text := string(l.source[begin:l.offset])
 	typ := token.LookupIdentifier(text)
 	l.emit(typ, text, start)
-	if typ == token.Func && l.depth > l.layoutDepth {
+	if typ == token.Func && l.depth > l.layoutDepth() {
 		l.lambdaHeaderDepth = l.depth
 	}
 }
@@ -312,10 +331,10 @@ func (l *lexer) scanOperator(start token.Position) error {
 	remaining := string(l.source[l.offset:])
 	for _, op := range operators {
 		if strings.HasPrefix(remaining, op.text) {
-			if op.typ == token.Comma && l.layoutDepth > 0 && l.depth == l.layoutDepth {
+			if op.typ == token.Comma && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
 				l.endLambdaLayout(start)
 			}
-			if (op.typ == token.RParen || op.typ == token.RBracket || op.typ == token.RBrace) && l.layoutDepth > 0 && l.depth == l.layoutDepth {
+			if (op.typ == token.RParen || op.typ == token.RBracket || op.typ == token.RBrace) && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
 				l.endLambdaLayout(start)
 			}
 			for range len(op.text) {
@@ -328,17 +347,15 @@ func (l *lexer) scanOperator(start token.Position) error {
 				if l.depth > 0 {
 					l.depth--
 				}
-				if l.layoutDepth > 0 && l.depth < l.layoutDepth {
-					l.layoutDepth = 0
-					l.layoutIndentDepth = 0
+				for len(l.layouts) > 0 && l.depth < l.layoutDepth() {
+					l.layouts = l.layouts[:len(l.layouts)-1]
 					l.lambdaHeaderDepth = 0
 				}
 			}
 			l.emit(op.typ, op.text, start)
-			if op.typ == token.Colon && l.lambdaHeaderDepth == l.depth {
+			if op.typ == token.Colon && l.lambdaHeaderDepth > 0 && l.lambdaHeaderDepth == l.depth {
 				if l.blockFollows() {
-					l.layoutDepth = l.depth
-					l.layoutIndentDepth = len(l.indents)
+					l.layouts = append(l.layouts, lambdaLayout{depth: l.depth, indentDepth: len(l.indents)})
 				}
 				l.lambdaHeaderDepth = 0
 			}
@@ -353,12 +370,12 @@ func (l *lexer) endLambdaLayout(position token.Position) {
 	if len(l.tokens) > 0 && l.tokens[len(l.tokens)-1].Type != token.Newline && l.tokens[len(l.tokens)-1].Type != token.Dedent {
 		l.emit(token.Newline, "", position)
 	}
-	for len(l.indents) > l.layoutIndentDepth {
+	layout := l.layouts[len(l.layouts)-1]
+	for len(l.indents) > layout.indentDepth {
 		l.indents = l.indents[:len(l.indents)-1]
 		l.emit(token.Dedent, "", position)
 	}
-	l.layoutDepth = 0
-	l.layoutIndentDepth = 0
+	l.layouts = l.layouts[:len(l.layouts)-1]
 	l.lambdaHeaderDepth = 0
 }
 
