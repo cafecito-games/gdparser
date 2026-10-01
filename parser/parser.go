@@ -261,13 +261,20 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 				continue
 			}
 		}
-		if p.at(token.Comment) && p.endsLineOf(stmt) {
+		// A statement may end with its own trailing comment, and with the
+		// comments held back from its continuation lines, which have nowhere to
+		// sit inside the statement. The first comment on the statement's own line
+		// trails it; the rest keep the scope they were written in by standing as
+		// comments of their own after it.
+		trailing := p.endsLineOf(stmt)
+		for p.at(token.Comment) {
 			comment := commentNode(p.advance())
-			if trivia := ast.TriviaOf(stmt); trivia != nil {
+			if trivia := ast.TriviaOf(stmt); trailing && trivia != nil && trivia.TrailingComment == nil {
 				trivia.TrailingComment = comment
 			} else {
 				statements = append(statements, comment)
 			}
+			trailing = false
 		}
 		if !p.at(token.Newline) {
 			if p.lambdaEnded {
@@ -402,29 +409,26 @@ func (p *parser) parseSuiteFor(forLambda bool) ([]ast.Statement, token.Position,
 	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
 		return nil, token.Position{}, err
 	}
-	var headerComment ast.Statement
-	if p.at(token.Comment) {
-		headerComment = commentNode(p.advance())
+	// The colon's line may end with a comment, and with the comments held back
+	// from the header's continuation lines, which have nowhere to sit inside the
+	// header. All of them open the block, which is the nearest scope the
+	// statement owns.
+	var headerComments []ast.Statement
+	for p.at(token.Comment) {
+		headerComments = append(headerComments, commentNode(p.advance()))
 	}
 	if !p.at(token.Newline) {
 		if forLambda && !beginsStatement(p.peek().Type) {
 			// A lambda may carry no body at all, as "func():" written inside an
 			// expression does. Godot reads the body as empty and ends it here,
 			// leaving what follows to the expression the lambda sits in.
-			body := []ast.Statement{}
-			if headerComment != nil {
-				body = append(body, headerComment)
-			}
-			return body, p.previous().Span.End, nil
+			return headerComments, p.previous().Span.End, nil
 		}
 		stmt, _, err := p.parseStatement()
 		if err != nil {
 			return nil, token.Position{}, err
 		}
-		body := []ast.Statement{}
-		if headerComment != nil {
-			body = append(body, headerComment)
-		}
+		body := append([]ast.Statement{}, headerComments...)
 		body = append(body, stmt)
 		for p.match(token.Semicolon) {
 			if p.at(token.Newline, token.Comment) {
@@ -451,10 +455,7 @@ func (p *parser) parseSuiteFor(forLambda bool) ([]ast.Statement, token.Position,
 	if _, err := p.expect(token.Newline, "expected newline before block"); err != nil {
 		return nil, token.Position{}, err
 	}
-	var leading []ast.Statement
-	if headerComment != nil {
-		leading = append(leading, headerComment)
-	}
+	leading := append([]ast.Statement{}, headerComments...)
 	for {
 		for p.match(token.Newline) {
 		}

@@ -142,6 +142,10 @@ type lexer struct {
 	// pending holds tokens produced but not yet handed out, such as the rest of
 	// a run of dedents.
 	pending []token.Token
+	// continued holds the comments written on the continuation lines of the
+	// logical line being scanned. They sit in the middle of a statement, where
+	// nothing can carry them, so they are held until the line ends.
+	continued []token.Token
 	// lastType is the type of the token produced most recently, which is what
 	// says whether the source already ended with a line break.
 	lastType token.Type
@@ -203,6 +207,7 @@ func (l *lexer) step() error {
 	if l.done() {
 		if !l.ended {
 			l.ended = true
+			l.flushContinuationComments()
 			position := l.position()
 			if l.lastType != token.Newline {
 				l.emit(token.Newline, "", position)
@@ -235,6 +240,7 @@ func (l *lexer) step() error {
 	case c == '\n':
 		l.advance()
 		if !l.multiline {
+			l.flushContinuationComments()
 			l.emit(token.Newline, "", start)
 		}
 		l.atStart = true
@@ -403,13 +409,41 @@ func (l *lexer) scanComment(start token.Position) {
 	l.emit(token.Comment, string(l.source[begin:l.offset]), start)
 }
 
+// scanContinuation consumes a backslash that joins the next source line to this
+// one, along with the whitespace and the comment lines that follow it. Godot
+// skips both and discards the comments; they are held here instead and given back
+// at the end of the logical line, which is the nearest place a statement can
+// carry them.
 func (l *lexer) scanContinuation() {
 	l.advance() // backslash
 	l.advance() // newline
-	for !l.done() && (l.peek() == ' ' || l.peek() == '\t' || l.peek() == '\r') {
-		l.advance()
+	for !l.done() {
+		for !l.done() && (l.peek() == ' ' || l.peek() == '\t' || l.peek() == '\r') {
+			l.advance()
+		}
+		if l.peek() != '#' {
+			break
+		}
+		start := l.position()
+		l.scanComment(start)
+		l.continued = append(l.continued, l.pending[len(l.pending)-1])
+		l.pending = l.pending[:len(l.pending)-1]
+		if l.peek() == '\n' {
+			l.advance()
+		}
 	}
 	l.atStart = false
+}
+
+// flushContinuationComments gives back the comments held from this logical line's
+// continuation lines, so that they come just before the line ends.
+func (l *lexer) flushContinuationComments() {
+	if len(l.continued) == 0 {
+		return
+	}
+	l.pending = append(l.pending, l.continued...)
+	l.lastType = l.continued[len(l.continued)-1].Type
+	l.continued = nil
 }
 
 func (l *lexer) scanIdentifier(start token.Position) {
@@ -458,6 +492,10 @@ func (l *lexer) scanNumber(start token.Position) {
 	l.emit(typ, string(l.source[begin:l.offset]), start)
 }
 
+// scanString reads a string literal. Only the end of the source leaves one
+// unterminated: Godot's tokenizer takes a line break inside a quoted string as
+// part of its text, whether the string is triple-quoted or not, and reports
+// nothing until it runs out of source.
 func (l *lexer) scanString(start token.Position) error {
 	l.atStart = false
 	begin := start.Offset
@@ -486,9 +524,6 @@ func (l *lexer) scanString(start token.Position) error {
 				return nil
 			}
 			continue
-		}
-		if l.peek() == '\n' && !triple {
-			return &Error{Position: start, Message: "unterminated string literal"}
 		}
 		l.advance()
 	}
