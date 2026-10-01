@@ -575,6 +575,26 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			// leaving what follows to the expression the lambda sits in.
 			return headerComments, p.previous().Span.End, nil
 		}
+		if p.at(token.At) {
+			if forLambda {
+				return nil, token.Position{}, p.error(p.peek(), "a lambda's body cannot begin with an annotation")
+			}
+			// An annotation is no statement of the block it is written in: Godot
+			// holds it for the next declaration and ends a one-line block at
+			// once, so the block is empty and the annotation, with what it
+			// decorates, belongs to the scope around it.
+			return headerComments, colon.Span.End, nil
+		}
+		if classBody && p.at(token.Static) {
+			// "static" alone is the one member a one-line class reads, and Godot
+			// forgets it when the class ends, so the declaration after it is a
+			// plain one of the scope around the class.
+			static := p.advance()
+			if !p.at(token.Func, token.Var) {
+				return nil, token.Position{}, p.error(p.peek(), "expected func or var after static")
+			}
+			return headerComments, static.Span.End, nil
+		}
 		stmt, _, err := p.parseStatement()
 		if err != nil {
 			return nil, token.Position{}, err
@@ -621,7 +641,11 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 				trailing = append(trailing, comment)
 				end = comment.Span().End
 			default:
-				continuation = append(continuation, commentNode(p.advance()))
+				comment := commentNode(p.advance())
+				continuation = append(continuation, comment)
+				if comment.Span().End.Offset > end.Offset {
+					end = comment.Span().End
+				}
 			}
 		}
 		if p.inLambda && !p.at(token.Newline, token.Semicolon, token.EOF, token.Dedent) {
