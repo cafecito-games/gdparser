@@ -449,8 +449,10 @@ func endsInsideMatch(expr ast.Expression) bool {
 
 // statementsEndInsideMatch reports whether the last statement of body leaves a
 // match statement's case list open, directly or through the blocks that end
-// with it.
+// with it. A comment written at the end of the body is emitted inside the case
+// body it was written in, so the case list is still open behind it.
 func statementsEndInsideMatch(body []ast.Statement) bool {
+	body, _ = splitTrailingComment(body)
 	if len(body) == 0 {
 		return false
 	}
@@ -835,6 +837,12 @@ func (p *printer) inlineStatement(statement ast.Statement) doc {
 }
 
 func parenthesized(inner doc) doc {
+	if endsWithLineComment(inner) {
+		// The comment holds the rest of its line, and the parenthesis closes a
+		// block the comment was written inside, so it takes the next line
+		// indented with that block, as the comma after such an item does.
+		return group(concat(text("("), inner, nest(1, concat(hardLine, text(")")))))
+	}
 	return group(concat(text("("), closeAfter(inner, ")")))
 }
 

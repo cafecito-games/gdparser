@@ -538,47 +538,47 @@ func TestCommentInsideAnInlineLambdaBody(t *testing.T) {
 		{
 			name:   "a ternary's alternative, which takes parentheses",
 			source: "var b = true\nvar y = 1 if b else func(): return 1  # c\n",
-			want:   "var b = true\nvar y = 1 if b else (func(): return 1  # c\n)\n",
+			want:   "var b = true\nvar y = 1 if b else (func(): return 1  # c\n\t)\n",
 		},
 		{
 			name:   "an await operand, which takes parentheses",
 			source: "var f = await func(): return 1  # c\n",
-			want:   "var f = await (func(): return 1  # c\n)\n",
+			want:   "var f = await (func(): return 1  # c\n\t)\n",
 		},
 		{
 			name:   "an if condition, whose colon follows it",
-			source: "func w():\n\tif (func(): return 1  # c\n\t):\n\t\tpass\n",
-			want:   "func w():\n\tif (func(): return 1  # c\n\t):\n\t\tpass\n",
+			source: "func w():\n\tif (func(): return 1  # c\n\t\t):\n\t\tpass\n",
+			want:   "func w():\n\tif (func(): return 1  # c\n\t\t):\n\t\tpass\n",
 		},
 		{
 			name:   "a while condition",
-			source: "func w():\n\twhile (func(): return 1  # c\n\t):\n\t\tpass\n",
-			want:   "func w():\n\twhile (func(): return 1  # c\n\t):\n\t\tpass\n",
+			source: "func w():\n\twhile (func(): return 1  # c\n\t\t):\n\t\tpass\n",
+			want:   "func w():\n\twhile (func(): return 1  # c\n\t\t):\n\t\tpass\n",
 		},
 		{
 			name:   "a match value",
-			source: "func w():\n\tmatch (func(): return 1  # c\n\t):\n\t\t1:\n\t\t\tpass\n",
-			want:   "func w():\n\tmatch (func(): return 1  # c\n\t):\n\t\t1:\n\t\t\tpass\n",
+			source: "func w():\n\tmatch (func(): return 1  # c\n\t\t):\n\t\t1:\n\t\t\tpass\n",
+			want:   "func w():\n\tmatch (func(): return 1  # c\n\t\t):\n\t\t1:\n\t\t\tpass\n",
 		},
 		{
 			name:   "a dictionary key, whose separator follows it",
 			source: "var d = {(func(): return 1  # c\n): 2}\n",
-			want:   "var d = {\n\t(func(): return 1  # c\n\t): 2,\n}\n",
+			want:   "var d = {\n\t(func(): return 1  # c\n\t\t): 2,\n}\n",
 		},
 		{
 			name:   "an initializer an accessor block follows",
-			source: "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
-			want:   "var x = (func(): return 1  # c\n):\n\tget:\n\t\treturn 1\n",
+			source: "var x = (func(): return 1  # c\n\t):\n\tget:\n\t\treturn 1\n",
+			want:   "var x = (func(): return 1  # c\n\t):\n\tget:\n\t\treturn 1\n",
 		},
 		{
 			name:   "a match guard, whose colon follows it",
-			source: "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t):\n\t\t\tpass\n",
-			want:   "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t):\n\t\t\tpass\n",
+			source: "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t\t):\n\t\t\tpass\n",
+			want:   "func w(x):\n\tmatch x:\n\t\t1 when (func(): return true  # c\n\t\t\t):\n\t\t\tpass\n",
 		},
 		{
 			name:   "a member access on a parenthesized lambda",
 			source: "var y = (func(): return 1  # c\n).call()\n",
-			want:   "var y = (func(): return 1  # c\n).call()\n",
+			want:   "var y = (func(): return 1  # c\n\t).call()\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -701,6 +701,13 @@ func TestCommaAfterItemEndingInsideAMatch(t *testing.T) {
 			name:   "an operand reached through a binary expression",
 			source: "func w(q, r):\n\tvar x = [r + func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t]\n",
 			want:   "func w(q, r):\n\tvar x = [\n\t\tr + (func(a):\n\t\t\tmatch a:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t),\n\t]\n",
+		},
+		{
+			// A comment at the end of the body sits inside the case body it
+			// was written in, so the case list is still open behind it.
+			name:   "a body ending in a comment after the match",
+			source: "func w(q):\n\tvar x = [not func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t# c\n\t]\n",
+			want:   "func w(q):\n\tvar x = [\n\t\tnot (func(v):\n\t\t\tmatch v:\n\t\t\t\t1:\n\t\t\t\t\tpass\n\t\t\t# c\n\t\t\t),\n\t]\n",
 		},
 		{
 			name:   "an await operand",
