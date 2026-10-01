@@ -23,8 +23,8 @@ var styleCases = []struct {
 	},
 	{
 		name:   "single line suite is expanded",
-		source: "if x: return\n",
-		want:   "if x:\n\treturn\n",
+		source: "func f(x):\n\tif x: return\n",
+		want:   "func f(x):\n\tif x:\n\t\treturn\n",
 	},
 	{
 		name:   "two blank lines surround a function",
@@ -451,8 +451,8 @@ func TestCollectionCommentPlacement(t *testing.T) {
 		},
 		{
 			name:   "an argument list indents a comment with its arguments",
-			source: "f(1,\n\t# c\n\t2)\n",
-			want:   "f(\n\t\t1,\n\t\t# c\n\t\t2\n)\n",
+			source: "func w():\n\tf(1,\n\t\t# c\n\t\t2)\n",
+			want:   "func w():\n\tf(\n\t\t\t1,\n\t\t\t# c\n\t\t\t2\n\t)\n",
 		},
 		{
 			name:   "an enum comment keeps its own line",

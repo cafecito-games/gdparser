@@ -47,8 +47,8 @@ func TestLuaStyleDictionary(t *testing.T) {
 		},
 		{
 			name:   "as a call argument",
-			source: "foo({x = 1})\n",
-			want:   "foo({ x = 1 })\n",
+			source: "func f():\n\tfoo({x = 1})\n",
+			want:   "func f():\n\tfoo({ x = 1 })\n",
 		},
 		{
 			name:   "the colon style is unchanged",

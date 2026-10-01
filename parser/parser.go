@@ -3,6 +3,7 @@ package parser
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/cafecito-games/gdparser/ast"
 	"github.com/cafecito-games/gdparser/lexer"
@@ -34,7 +35,7 @@ func Parse(filename string, source []byte) (*ast.File, error) {
 	if err != nil {
 		return nil, p.wrap(err)
 	}
-	statements, err := p.parseStatements(false)
+	statements, err := p.parseStatements(false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +61,10 @@ type parser struct {
 	// meaning in the construct being parsed. Godot keeps the same stack, and the
 	// tokenizer follows its top.
 	multilineStack []bool
+	// inLoop reports that the statement being read sits inside the body of a for
+	// or a while, which is the only place "break" and "continue" belong. Godot
+	// keeps can_break and can_continue for this, setting both at the same places.
+	inLoop bool
 	// inLambda reports that the statement being read belongs to a lambda body,
 	// where anything that is not a line break may end the body instead.
 	inLambda bool
@@ -158,11 +163,12 @@ func (p *parser) takeBlankLines() int {
 }
 
 // parseStatements reads a list of statements. block says the list is an indented
-// block, which ends at its dedent. A list read anywhere inside a lambda body may
+// block, which ends at its dedent, and classBody that the list is a class body,
+// which holds only declarations. A list read anywhere inside a lambda body may
 // also end at the first thing that could not continue it, because what follows
 // belongs to the expression the lambda was written in; the body and every block
 // nested in it then close together.
-func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
+func (p *parser) parseStatements(block, classBody bool) ([]ast.Statement, error) {
 	var statements []ast.Statement
 	var pending []*ast.Annotation
 	pendingBlankLines := 0
@@ -202,6 +208,11 @@ func (p *parser) parseStatements(block bool) ([]ast.Statement, error) {
 			return nil, p.error(p.peek(), "unexpected dedent")
 		}
 
+		if classBody && !beginsClassMember(p.peek().Type) {
+			// A class body holds declarations, not code. Godot's
+			// parse_class_body accepts nothing else.
+			return nil, p.error(p.peek(), "unexpected "+describe(p.peek())+" in a class body")
+		}
 		if p.inLambda && !beginsStatement(p.peek().Type) {
 			// Inside a lambda body, source that could not begin a statement is
 			// the rest of the expression the lambda was written in, so the body
@@ -389,7 +400,15 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 	case token.Assert:
 		stmt, err := p.parseAssert()
 		return stmt, false, err
-	case token.Pass, token.Break, token.Continue, token.Breakpoint:
+	case token.Break, token.Continue:
+		if !p.inLoop {
+			// A lambda body is outside every loop around it, which is why a
+			// "continue" written there is an error even inside a for.
+			return nil, false, p.error(p.peek(), "'"+p.peek().Lexeme+"' is only allowed inside a loop")
+		}
+		tok := p.advance()
+		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
+	case token.Pass, token.Breakpoint:
 		tok := p.advance()
 		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
 	default:
@@ -399,13 +418,29 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 }
 
 func (p *parser) parseSuite() ([]ast.Statement, token.Position, error) {
-	return p.parseSuiteFor(false)
+	return p.parseSuiteFor(false, false)
+}
+
+// parseLoopSuite parses the block a for or a while opens, which is where "break"
+// and "continue" belong.
+func (p *parser) parseLoopSuite() ([]ast.Statement, token.Position, error) {
+	wasInLoop := p.inLoop
+	p.inLoop = true
+	body, end, err := p.parseSuiteFor(false, false)
+	p.inLoop = wasInLoop
+	return body, end, err
+}
+
+// parseClassSuite parses the block an inner class opens, which holds only
+// declarations.
+func (p *parser) parseClassSuite() ([]ast.Statement, token.Position, error) {
+	return p.parseSuiteFor(false, true)
 }
 
 // parseSuiteFor parses the block a colon opens. forLambda marks a lambda body,
 // which ends at the first thing that could not continue it rather than only at a
 // dedent, because the expression the lambda sits in picks up from there.
-func (p *parser) parseSuiteFor(forLambda bool) ([]ast.Statement, token.Position, error) {
+func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, token.Position, error) {
 	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
 		return nil, token.Position{}, err
 	}
@@ -470,7 +505,7 @@ func (p *parser) parseSuiteFor(forLambda bool) ([]ast.Statement, token.Position,
 	if _, err := p.expect(token.Indent, "expected an indented block"); err != nil {
 		return nil, token.Position{}, err
 	}
-	body, err := p.parseStatements(true)
+	body, err := p.parseStatements(true, classBody)
 	if err != nil {
 		return nil, token.Position{}, err
 	}
@@ -590,6 +625,35 @@ func beginsStatement(typ token.Type) bool {
 		return true
 	}
 	return beginsExpression(typ)
+}
+
+// beginsClassMember reports whether typ may open something a class body holds:
+// a declaration, an annotation, "pass", a comment, or a string standing in for a
+// block comment. Godot's parse_class_body takes nothing else.
+func beginsClassMember(typ token.Type) bool {
+	switch typ {
+	case token.At, token.Var, token.Const, token.Signal, token.Func,
+		token.Class, token.Enum, token.Static, token.Pass, token.Comment,
+		token.String, token.Extends, token.ClassName:
+		return true
+	}
+	return false
+}
+
+// describe names a token for an error message, by what it is rather than by the
+// text it was written with.
+func describe(tok token.Token) string {
+	switch tok.Type {
+	case token.Identifier:
+		return "identifier " + strconv.Quote(tok.Lexeme)
+	case token.Integer, token.Float:
+		return "number " + strconv.Quote(tok.Lexeme)
+	case token.String:
+		return "string"
+	case token.Newline, token.Indent, token.Dedent, token.EOF:
+		return "end of line"
+	}
+	return strconv.Quote(string(tok.Type))
 }
 
 // beginsExpression reports whether typ has a prefix rule, which is how Godot

@@ -1,0 +1,75 @@
+package parser_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/cafecito-games/gdparser/parser"
+)
+
+// A class body holds declarations, not code. Godot's parse_class_body takes var,
+// const, signal, func, class, enum, static, an annotation, "pass", and a string
+// standing in for a block comment, and nothing else.
+func TestClassBodyHoldsOnlyDeclarations(t *testing.T) {
+	for _, test := range []struct{ name, source string }{
+		{"an assignment at file level", "var error\nerror = true\n"},
+		{"a call at file level", "print(1)\n"},
+		{"an if at file level", "if true:\n\tpass\n"},
+		{"a return at file level", "return 1\n"},
+		{"a for inside an inner class", "class A:\n\tfor i in []:\n\t\tpass\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parser.Parse("class.gd", []byte(test.source))
+			if err == nil {
+				t.Fatal("expected a parse error")
+			}
+			if !strings.Contains(err.Error(), "in a class body") {
+				t.Fatalf("error does not name the rule: %v", err)
+			}
+		})
+	}
+	for _, source := range []string{
+		"extends Node\nclass_name A\n\n@tool\nvar a := 1\nconst B := 2\nsignal s\nenum E { X }\n\nstatic var c := 3\n\nfunc f():\n\tpass\n\nclass Inner:\n\tpass\n",
+		"pass\n",
+		// A string on its own stands in for a block comment.
+		"\"\"\"a block comment\"\"\"\nvar a := 1\n",
+	} {
+		if _, err := parser.Parse("class.gd", []byte(source)); err != nil {
+			t.Errorf("parse %q: %v", source, err)
+		}
+	}
+}
+
+// "break" and "continue" belong inside a loop. A lambda body is outside every
+// loop around it, which Godot marks by clearing can_break and can_continue when
+// it reads one.
+func TestBreakAndContinueNeedALoop(t *testing.T) {
+	for _, test := range []struct{ name, source string }{
+		{"break at function level", "func f():\n\tbreak\n"},
+		{"continue at function level", "func f():\n\tcontinue\n"},
+		{"break inside a match", "func f(v):\n\tmatch v:\n\t\t1:\n\t\t\tbreak\n"},
+		{"continue inside a lambda in a loop", "func f():\n\tfor i in []:\n\t\tvar g := func():\n\t\t\tcontinue\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parser.Parse("loop.gd", []byte(test.source))
+			if err == nil {
+				t.Fatal("expected a parse error")
+			}
+			if !strings.Contains(err.Error(), "only allowed inside a loop") {
+				t.Fatalf("error does not name the rule: %v", err)
+			}
+		})
+	}
+	for _, source := range []string{
+		"func f():\n\tfor i in []:\n\t\tbreak\n",
+		"func f():\n\twhile true:\n\t\tcontinue\n",
+		// A match branch does not close the loop around it.
+		"func f(v):\n\twhile true:\n\t\tmatch v:\n\t\t\t1:\n\t\t\t\tbreak\n",
+		// Nor does an if.
+		"func f(v):\n\tfor i in []:\n\t\tif v:\n\t\t\tcontinue\n",
+	} {
+		if _, err := parser.Parse("loop.gd", []byte(source)); err != nil {
+			t.Errorf("parse %q: %v", source, err)
+		}
+	}
+}

@@ -331,14 +331,17 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 		}
 	}
 	inline := p.peekN(1).Type != token.Newline && p.peekN(1).Type != token.Comment
-	previousInLambda := p.inLambda
+	previousInLambda, previousInLoop := p.inLambda, p.inLoop
 	p.inLambda = true
+	// A lambda body is outside every loop that encloses the lambda, so "break"
+	// and "continue" do not reach out of it.
+	p.inLoop = false
 	// A body about to be read has not ended, whatever an earlier lambda in the
 	// same statement left behind. Godot reads a body's first statement before it
 	// looks at the marker at all, which comes to the same thing.
 	p.lambdaEnded = false
-	body, end, err := p.parseSuiteFor(true)
-	p.inLambda = previousInLambda
+	body, end, err := p.parseSuiteFor(true, false)
+	p.inLambda, p.inLoop = previousInLambda, previousInLoop
 	if err != nil {
 		return nil, err
 	}

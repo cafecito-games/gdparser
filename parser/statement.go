@@ -495,7 +495,7 @@ func (p *parser) parseClass() (ast.Statement, error) {
 			return nil, err
 		}
 	}
-	body, end, err := p.parseSuite()
+	body, end, err := p.parseClassSuite()
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +672,7 @@ func (p *parser) parseWhile() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, end, err := p.parseSuite()
+	body, end, err := p.parseLoopSuite()
 	if err != nil {
 		return nil, err
 	}
@@ -706,7 +706,7 @@ func (p *parser) parseFor() (ast.Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, end, err := p.parseSuite()
+	body, end, err := p.parseLoopSuite()
 	if err != nil {
 		return nil, err
 	}

@@ -114,9 +114,9 @@ func TestControlFlowComponentSpans(t *testing.T) {
 	if first:
 		pass
 	elif second:
-		break
+		breakpoint
 	elif third:
-		continue
+		pass
 	else:
 		pass
 	while running:
@@ -138,8 +138,8 @@ func TestControlFlowComponentSpans(t *testing.T) {
 		overall string
 	}{
 		{"if", "if first:\n\t\tpass"},
-		{"elif", "elif second:\n\t\tbreak"},
-		{"elif", "elif third:\n\t\tcontinue"},
+		{"elif", "elif second:\n\t\tbreakpoint"},
+		{"elif", "elif third:\n\t\tpass"},
 	}
 	for i, want := range branchWants {
 		assertSpan(t, source, conditional.Branches[i].KeywordSpan, want.keyword)
@@ -147,7 +147,7 @@ func TestControlFlowComponentSpans(t *testing.T) {
 	}
 	assertSpan(t, source, conditional.ElseKeywordSpan, "else")
 	assertSpan(t, source, conditional.ElseSpan, "else:\n\t\tpass")
-	assertSpan(t, source, conditional.Branches[1].Body[0].(*ast.KeywordStatement).KeywordSpan, "break")
+	assertSpan(t, source, conditional.Branches[1].Body[0].(*ast.KeywordStatement).KeywordSpan, "breakpoint")
 
 	while := function.Body[1].(*ast.WhileStatement)
 	assertSpan(t, source, while.KeywordSpan, "while")
