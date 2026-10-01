@@ -198,7 +198,11 @@ func TestExpressionComponentSpans(t *testing.T) {
 }
 
 func TestRepeatedUnicodeAndMultilineComponentSpans(t *testing.T) {
-	source := []byte("func café(\n\trepeated:\n\t\tArray[\n\t\t\tDictionary[String, int]\n\t\t] = repeated\n\t):\n\tvar repeated = repeated.repeated\n")
+	// The name is written four times over, as a parameter, as its own default,
+	// and as both halves of an attribute, so that each span has to find its own
+	// occurrence. The local carries a different name because Godot does not let
+	// one shadow a parameter.
+	source := []byte("func café(\n\trepeated:\n\t\tArray[\n\t\t\tDictionary[String, int]\n\t\t] = repeated\n\t):\n\tvar copied = repeated.repeated\n")
 	file := parseSpans(t, source)
 	function := file.Statements[0].(*ast.FunctionDeclaration)
 	assertSpan(t, source, function.NameSpan, "café")
@@ -207,11 +211,17 @@ func TestRepeatedUnicodeAndMultilineComponentSpans(t *testing.T) {
 	assertSpan(t, source, parameter.TypeSpan, "Array[\n\t\t\tDictionary[String, int]\n\t\t]")
 	assertSpan(t, source, parameter.DefaultOperatorSpan, "=")
 	declaration := function.Body[0].(*ast.VariableDeclaration)
-	assertSpan(t, source, declaration.NameSpan, "repeated")
+	assertSpan(t, source, declaration.NameSpan, "copied")
 	member := declaration.Value.(*ast.MemberExpression)
+	object := member.Object.(*ast.Identifier)
+	assertSpan(t, source, object.Span(), "repeated")
 	assertSpan(t, source, member.PropertySpan, "repeated")
-	if declaration.NameSpan.Start.Offset == parameter.NameSpan.Start.Offset || declaration.NameSpan.Start.Offset == member.PropertySpan.Start.Offset {
-		t.Fatal("repeated-name spans reused an earlier occurrence")
+	offsets := map[int]bool{}
+	for _, span := range []token.Span{parameter.NameSpan, object.Span(), member.PropertySpan} {
+		if offsets[span.Start.Offset] {
+			t.Fatal("repeated-name spans reused an earlier occurrence")
+		}
+		offsets[span.Start.Offset] = true
 	}
 }
 
