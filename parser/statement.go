@@ -371,6 +371,16 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 	if static.Type == token.Static {
 		start = static.Span.Start
 	}
+	// A static constructor is called by the engine, not by a caller, so it takes
+	// no arguments and must say that it is static.
+	if name.Lexeme == staticConstructor {
+		if static.Type != token.Static {
+			return nil, p.error(name, "a static constructor must be declared static")
+		}
+		if len(parameters) > 0 {
+			return nil, p.error(name, "a static constructor takes no parameters")
+		}
+	}
 	if !p.at(token.Colon) {
 		return &ast.FunctionDeclaration{
 			Base: spanFrom(start, p.previous().Span.End), Name: name.Lexeme, NameSpan: name.Span, Parameters: parameters,
@@ -379,7 +389,10 @@ func (p *parser) parseFunction(keyword, static token.Token) (ast.Statement, erro
 			ParameterComments: parameterComments,
 		}, nil
 	}
+	wasInFunction := p.functionName
+	p.functionName = name.Lexeme
 	body, end, err := p.parseSuite()
+	p.functionName = wasInFunction
 	if err != nil {
 		return nil, err
 	}
@@ -880,10 +893,20 @@ func (p *parser) parseAssert() (ast.Statement, error) {
 	return &ast.ExpressionStatement{Base: base(call.Span()), Expression: call}, nil
 }
 
+// constructor and staticConstructor name the two functions Godot calls to build
+// an object, which may not hand a value back to it.
+const (
+	constructor       = "_init"
+	staticConstructor = "_static_init"
+)
+
 func (p *parser) parseReturn() (ast.Statement, error) {
 	start := p.advance()
 	statement := &ast.ReturnStatement{Base: base(start.Span), KeywordSpan: start.Span}
 	if !p.at(token.Newline, token.Comment) {
+		if p.functionName == constructor || p.functionName == staticConstructor {
+			return nil, p.error(p.peek(), "a constructor cannot return a value")
+		}
 		value, err := p.parseExpression(ast.PrecedenceAssignment)
 		if err != nil {
 			return nil, err

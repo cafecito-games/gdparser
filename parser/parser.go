@@ -61,6 +61,10 @@ type parser struct {
 	// meaning in the construct being parsed. Godot keeps the same stack, and the
 	// tokenizer follows its top.
 	multilineStack []bool
+	// functionName is the name of the function whose body is being read, or empty
+	// outside one and inside a lambda. Godot reads it to hold a constructor to its
+	// own rules.
+	functionName string
 	// inLoop reports that the statement being read sits inside the body of a for
 	// or a while, which is the only place "break" and "continue" belong. Godot
 	// keeps can_break and can_continue for this, setting both at the same places.

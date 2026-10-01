@@ -332,6 +332,10 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	}
 	inline := p.peekN(1).Type != token.Newline && p.peekN(1).Type != token.Comment
 	previousInLambda, previousInLoop := p.inLambda, p.inLoop
+	// A lambda is a function of its own, so the rules that hold a constructor's
+	// body do not reach into one written inside it.
+	previousFunction := p.functionName
+	p.functionName = ""
 	p.inLambda = true
 	// A lambda body is outside every loop that encloses the lambda, so "break"
 	// and "continue" do not reach out of it.
@@ -341,7 +345,7 @@ func (p *parser) parseLambda(start token.Token) (ast.Expression, error) {
 	// looks at the marker at all, which comes to the same thing.
 	p.lambdaEnded = false
 	body, end, err := p.parseSuiteFor(true, false)
-	p.inLambda, p.inLoop = previousInLambda, previousInLoop
+	p.inLambda, p.inLoop, p.functionName = previousInLambda, previousInLoop, previousFunction
 	if err != nil {
 		return nil, err
 	}
