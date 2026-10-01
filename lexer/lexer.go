@@ -57,6 +57,12 @@ type lexer struct {
 	lambdaHeaderDepth int
 	indents           []int
 	tokens            []token.Token
+	// codeLineIndent, codeLineStart and codeLineFound cache the lookahead that
+	// nextCodeIndent performs. The cache holds while the scan stays before
+	// codeLineStart, which is the end of source when no code line follows.
+	codeLineIndent int
+	codeLineStart  int
+	codeLineFound  bool
 }
 
 // lambdaLayout records one multiline lambda body that is still open. Lambdas
@@ -167,7 +173,7 @@ func (l *lexer) scanIndent() error {
 		// indentation only says which block it belongs to, and that is settled
 		// by the next line of code: when that line is deeper, the comment
 		// belongs to the block the code stays in, and nothing closes here.
-		if next, ok := nextCodeIndent(l.source, l.offset); ok && next > columns {
+		if next, ok := l.nextCodeIndent(); ok && next > columns {
 			columns = next
 		}
 		if columns >= top {
@@ -201,6 +207,19 @@ func (l *lexer) scanIndent() error {
 	return nil
 }
 
+// nextCodeIndent returns the indentation of the next line of code, caching the
+// result until that line is reached. Every comment-only line in one run shares
+// the same following line of code, so without the cache a run of them would
+// rescan the source ahead of it once per line.
+func (l *lexer) nextCodeIndent() (int, bool) {
+	if l.offset < l.codeLineStart {
+		return l.codeLineIndent, l.codeLineFound
+	}
+	columns, start, ok := nextCodeIndent(l.source, l.offset)
+	l.codeLineIndent, l.codeLineStart, l.codeLineFound = columns, start, ok
+	return columns, ok
+}
+
 // indentFloor returns the smallest indentation stack height that indentation
 // alone may unwind to. Inside a multiline lambda body only the comma or closing
 // bracket that ends the body may leave it, so the body's own level is a floor.
@@ -230,26 +249,27 @@ func measureIndent(source []byte, offset int) (columns, next int) {
 }
 
 // nextCodeIndent returns the indentation width of the next line that holds
-// code, skipping the rest of the line at offset along with any blank and
-// comment-only lines, and reports whether such a line exists.
-func nextCodeIndent(source []byte, offset int) (int, bool) {
+// code and the offset that line's code starts at, skipping the rest of the line
+// at offset along with any blank and comment-only lines. It reports whether
+// such a line exists; when none does, the returned offset is the end of source.
+func nextCodeIndent(source []byte, offset int) (columns, start int, ok bool) {
 	for {
 		for offset < len(source) && source[offset] != '\n' {
 			offset++
 		}
 		if offset >= len(source) {
-			return 0, false
+			return 0, len(source), false
 		}
 		offset++
 		columns, next := measureIndent(source, offset)
 		if next >= len(source) {
-			return 0, false
+			return 0, len(source), false
 		}
 		offset = next
 		if source[offset] == '\n' || source[offset] == '\r' || source[offset] == '#' {
 			continue
 		}
-		return columns, true
+		return columns, offset, true
 	}
 }
 

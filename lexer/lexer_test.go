@@ -1,7 +1,9 @@
 package lexer_test
 
 import (
+	"bytes"
 	"testing"
+	"time"
 
 	"github.com/cafecito-games/gdparser/lexer"
 	"github.com/cafecito-games/gdparser/token"
@@ -326,5 +328,27 @@ func TestLexCommentStaysInsideTheInnerLambdaBody(t *testing.T) {
 	}
 	if firstDedent < comment {
 		t.Fatalf("the inner body closed before its comment: %v", kinds)
+	}
+}
+
+// A run of comment-only lines shares one lookahead for the line of code that
+// follows it, so lexing stays linear in the length of the run. Rescanning per
+// line made a file of this size take minutes. The budget is far above the
+// measured cost because this guards an order of growth, not a constant.
+func TestLexLongCommentRunStaysLinear(t *testing.T) {
+	const lines = 200000
+	source := bytes.Repeat([]byte("# c\n"), lines)
+	start := time.Now()
+	tokens, err := lexer.Lex(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("lexing %d comment-only lines took %v", lines, elapsed)
+	}
+	// Every line contributes its comment and its newline, and the file ends
+	// with EOF.
+	if want := lines*2 + 1; len(tokens) != want {
+		t.Fatalf("got %d tokens, want %d", len(tokens), want)
 	}
 }
