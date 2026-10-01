@@ -125,3 +125,64 @@ func TestLexDotIsNotSwallowedAfterAnIdentifier(t *testing.T) {
 		t.Fatalf("token 4 = %s, want %s", tokens[4].Type, token.Dot)
 	}
 }
+
+func TestLexCommentIndentedDeeperThanItsBlock(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\n\tpass\n\t\t# deeper\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline,
+		token.Comment, token.Newline,
+		token.Dedent, token.EOF,
+	}
+	if len(tokens) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %#v", len(tokens), len(want), tokens)
+	}
+	for i, typ := range want {
+		if tokens[i].Type != typ {
+			t.Errorf("token %d: got %s, want %s", i, tokens[i].Type, typ)
+		}
+	}
+}
+
+func TestLexCommentAtColumnZeroStillDedents(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("func a():\n\tpass\n# outer\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []token.Type{
+		token.Func, token.Identifier, token.LParen, token.RParen, token.Colon, token.Newline,
+		token.Indent, token.Pass, token.Newline, token.Dedent,
+		token.Comment, token.Newline, token.EOF,
+	}
+	if len(tokens) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %#v", len(tokens), len(want), tokens)
+	}
+	for i, typ := range want {
+		if tokens[i].Type != typ {
+			t.Errorf("token %d: got %s, want %s", i, tokens[i].Type, typ)
+		}
+	}
+}
+
+func TestLexOwnLineCommaEndsALambdaBody(t *testing.T) {
+	tokens, err := lexer.Lex([]byte("var x = [\n\tfunc():\n\t\tpass\n\t,\n\t2,\n]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []token.Type
+	for _, tok := range tokens {
+		kinds = append(kinds, tok.Type)
+	}
+	var dedents int
+	for _, kind := range kinds {
+		if kind == token.Dedent {
+			dedents++
+		}
+	}
+	if dedents != 1 {
+		t.Fatalf("got %d DEDENT tokens, want 1: %v", dedents, kinds)
+	}
+}

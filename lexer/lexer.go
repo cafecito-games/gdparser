@@ -138,14 +138,28 @@ func (l *lexer) scanIndent() error {
 	}
 
 measured:
-	// Blank lines do not affect the indentation stack. Comment indentation is
-	// significant to the AST even though Godot ignores it syntactically.
+	// Blank lines do not affect the indentation stack.
 	if l.done() || l.peek() == '\n' || l.peek() == '\r' {
 		return nil
 	}
 	l.atStart = false
+	if l.layoutDepth > 0 && l.depth == l.layoutDepth && closesLambdaLayout(l.peek()) {
+		// A comma or closing bracket on its own line ends the lambda body
+		// rather than continuing it, so endLambdaLayout unwinds the
+		// indentation stack when the token itself is scanned. Measuring this
+		// line here would instead reject an indentation that is allowed to sit
+		// outside the body's block.
+		return nil
+	}
 	top := l.indents[len(l.indents)-1]
 	p := token.Position{Offset: startOffset, Line: l.line, Column: 1}
+	if columns > top && l.peek() == '#' {
+		// A comment-only line may sit deeper than its block without opening
+		// one, as Godot's tokenizer discards comments before measuring
+		// indentation. Dedenting comments still close blocks, so that a
+		// comment written at an outer level stays in that outer scope.
+		return nil
+	}
 	if columns > top {
 		l.indents = append(l.indents, columns)
 		l.emit(token.Indent, "", p)
@@ -161,6 +175,12 @@ measured:
 		}
 	}
 	return nil
+}
+
+// closesLambdaLayout reports whether c, as the first character of a line,
+// terminates an enclosing multiline lambda body.
+func closesLambdaLayout(c byte) bool {
+	return c == ',' || c == ')' || c == ']' || c == '}'
 }
 
 func (l *lexer) scanComment(start token.Position) {

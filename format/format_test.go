@@ -349,3 +349,55 @@ func columnWidth(line string, tabWidth int) int {
 	}
 	return width
 }
+
+func TestCommaAfterItemEndingInAComment(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "required separator moves below the comment",
+			source: "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n, 2]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n\t,\n\t2,\n]\n",
+		},
+		{
+			name:   "optional trailing comma is dropped",
+			source: "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass\n\t\t# c\n]\n",
+		},
+		{
+			name:   "same-line trailing comment keeps the separator",
+			source: "var x = [\n\tfunc():\n\t\tpass  # c\n, 2]\n",
+			want:   "var x = [\n\tfunc():\n\t\tpass  # c\n\t,\n\t2,\n]\n",
+		},
+		{
+			name:   "same-line trailing comment drops the optional comma",
+			source: "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n]\n",
+			want:   "var x = [\n\tfunc():\n\t\tvar y = 1  # c\n]\n",
+		},
+		{
+			name:   "dictionary value ending in a comment",
+			source: "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n}\n",
+			want:   "var d = {\n\t\"k\": func():\n\t\tpass\n\t\t# c\n}\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.Parse("commas.gd", []byte(test.source))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			formatted := format.File(file)
+			if formatted != test.want {
+				t.Errorf("formatted = %q, want %q", formatted, test.want)
+			}
+			again, err := parser.Parse("commas.gd", []byte(formatted))
+			if err != nil {
+				t.Fatalf("formatted source did not parse: %v\n%s", err, formatted)
+			}
+			if reformatted := format.File(again); reformatted != formatted {
+				t.Errorf("formatting is not idempotent:\n%s\n--- became ---\n%s", formatted, reformatted)
+			}
+		})
+	}
+}
