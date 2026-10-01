@@ -32,6 +32,41 @@ func TestCommentAfterAType(t *testing.T) {
 			want:   "func f(\n\t\ta: int,  # c\n\t\tb: int\n):\n\tpass\n",
 		},
 		{
+			name:   "before a parameter's type",
+			source: "func f(a: # c\n\t\tint):\n\tpass\n",
+			want:   "func f(\n\t\ta: int  # c\n):\n\tpass\n",
+		},
+		{
+			name:   "inside a parameter's dotted type name",
+			source: "func f(a: Inner.  # c\n\t\tNested):\n\tpass\n",
+			want:   "func f(\n\t\ta: Inner.Nested  # c\n):\n\tpass\n",
+		},
+		{
+			name:   "before a parameter's default value",
+			source: "func f(a: int  # c\n\t\t= 1):\n\tpass\n",
+			want:   "func f(\n\t\ta: int = 1  # c\n):\n\tpass\n",
+		},
+		{
+			name:   "two comments interrupting one parameter",
+			source: "func f(a: # one\n\t\tint  # two\n\t\t= 1):\n\tpass\n",
+			want:   "func f(\n\t\ta: int = 1  # one\n\t\t# two\n):\n\tpass\n",
+		},
+		{
+			name:   "a comment interrupting the second parameter",
+			source: "func f(a, b: # c\n\t\tint):\n\tpass\n",
+			want:   "func f(\n\t\ta,\n\t\tb: int  # c\n):\n\tpass\n",
+		},
+		{
+			name:   "a comment interrupting a signal parameter",
+			source: "signal s(a: # c\n\t\tint)\n",
+			want:   "signal s(\n\t\ta: int  # c\n)\n",
+		},
+		{
+			name:   "a comment interrupting a lambda parameter",
+			source: "var f = func(a: # c\n\t\tint):\n\tpass\n",
+			want:   "var f = func(\n\t\ta: int  # c\n):\n\tpass\n",
+		},
+		{
 			name:   "after a declaration's type",
 			source: "var b: int = 1  # c\n",
 			want:   "var b: int = 1  # c\n",
@@ -51,8 +86,10 @@ func TestCommentAfterAType(t *testing.T) {
 			if formatted != test.want {
 				t.Errorf("formatted = %q, want %q", formatted, test.want)
 			}
-			if !strings.Contains(formatted, "# c") {
-				t.Fatalf("formatted source dropped the comment:\n%s", formatted)
+			for _, comment := range commentsIn(test.source) {
+				if !strings.Contains(formatted, comment) {
+					t.Fatalf("formatted source dropped %q:\n%s", comment, formatted)
+				}
 			}
 			again, err := parser.Parse("types.gd", []byte(formatted))
 			if err != nil {
