@@ -16,22 +16,27 @@ func (*ExpressionStatement) statement() {}
 type VariableDeclaration struct {
 	Base
 	Trivia
-	Annotations       []*Annotation   `json:"annotations,omitempty"`
-	Name              string          `json:"name"`
-	NameSpan          token.Span      `json:"name_span,omitempty"`
-	Type              string          `json:"type,omitempty"`
-	TypeSpan          token.Span      `json:"type_span,omitempty"`
-	Value             Expression      `json:"value,omitempty"`
-	OperatorSpan      token.Span      `json:"operator_span,omitempty"`
-	Constant          bool            `json:"constant,omitempty"`
-	Inferred          bool            `json:"inferred,omitempty"`
-	Static            bool            `json:"static,omitempty"`
-	StaticSpan        token.Span      `json:"static_span,omitempty"`
-	KeywordSpan       token.Span      `json:"keyword_span,omitempty"`
-	Getter            []Statement     `json:"getter,omitempty"`
-	GetterSpan        token.Span      `json:"getter_span,omitempty"`
-	GetterKeywordSpan token.Span      `json:"getter_keyword_span,omitempty"`
-	Setter            *PropertySetter `json:"setter,omitempty"`
+	Annotations  []*Annotation `json:"annotations,omitempty"`
+	Name         string        `json:"name"`
+	NameSpan     token.Span    `json:"name_span,omitempty"`
+	Type         string        `json:"type,omitempty"`
+	TypeSpan     token.Span    `json:"type_span,omitempty"`
+	Value        Expression    `json:"value,omitempty"`
+	OperatorSpan token.Span    `json:"operator_span,omitempty"`
+	Constant     bool          `json:"constant,omitempty"`
+	Inferred     bool          `json:"inferred,omitempty"`
+	Static       bool          `json:"static,omitempty"`
+	StaticSpan   token.Span    `json:"static_span,omitempty"`
+	KeywordSpan  token.Span    `json:"keyword_span,omitempty"`
+	// AccessorComments holds the comments written inside the property accessor
+	// block but outside an accessor body, anchored to the number of accessors
+	// before them. A comment that ended the block's colon line is anchored to
+	// the first accessor and marked trailing.
+	AccessorComments  []CollectionComment `json:"accessor_comments,omitempty"`
+	Getter            []Statement         `json:"getter,omitempty"`
+	GetterSpan        token.Span          `json:"getter_span,omitempty"`
+	GetterKeywordSpan token.Span          `json:"getter_keyword_span,omitempty"`
+	Setter            *PropertySetter     `json:"setter,omitempty"`
 }
 
 func (*VariableDeclaration) node()      {}
