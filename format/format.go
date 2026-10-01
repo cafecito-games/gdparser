@@ -56,8 +56,15 @@ func (p *printer) body(list []ast.Statement) doc {
 	return text("pass")
 }
 
-// suite renders an indented block beneath a statement header.
+// suite renders an indented block beneath a statement header, which the caller
+// has written through its colon. A comment that ended the header's line in the
+// source stays on it.
 func (p *printer) suite(list []ast.Statement) doc {
+	if len(list) > 0 {
+		if comment, ok := list[0].(*ast.Comment); ok && comment.TrailsHeader {
+			return concat(text("  "+p.commentText(comment)), nest(1, concat(hardLine, p.body(list[1:]))))
+		}
+	}
 	return nest(1, concat(hardLine, p.body(list)))
 }
 
@@ -686,6 +693,36 @@ func (p *printer) parameter(parameter ast.Parameter) doc {
 	return concat(text(header+" = "), p.expression(parameter.Default, 0))
 }
 
+// parenthesizedChain renders a chain of binary operators inside the parentheses
+// precedence requires around it, breaking before each operator so that it starts
+// its continuation line. The chain breaks only when it cannot fit the line by
+// itself: where a call after it could take the break instead, the chain is the
+// shorter read and stays whole.
+func (p *printer) parenthesizedChain(binary *ast.BinaryExpression) doc {
+	body := nest(2, concat(softLine, concat(p.chainParts(binary)...)))
+	closing := doc(softLine)
+	if endsWithLineComment(body) {
+		closing = hardLine
+	}
+	return yieldingGroup(concat(text("("), body, closing, text(")")))
+}
+
+// chainParts flattens a chain of binary operators that bind at one level into
+// operands separated by breakable operators. Every binary operator is
+// left-associative, so the chain runs down the left operands.
+func (p *printer) chainParts(binary *ast.BinaryExpression) []doc {
+	operator := p.operatorText(binary.Operator)
+	precedence := ast.OperatorPrecedence(operator)
+	var parts []doc
+	left, ok := binary.Left.(*ast.BinaryExpression)
+	if ok && ast.OperatorPrecedence(p.operatorText(left.Operator)) == precedence {
+		parts = p.chainParts(left)
+	} else {
+		parts = append(parts, p.expression(binary.Left, precedence))
+	}
+	return append(parts, spaceLine, text(operator+" "), p.expression(binary.Right, precedence+1))
+}
+
 // logicalChain renders a chain of one logical operator, breaking before each
 // keyword so that and/or starts its continuation line. A logical expression can
 // only continue across lines inside parentheses, so breaking always adds them
@@ -764,15 +801,14 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		if isLogicalOperator(operator) {
 			return p.logicalChain(node, precedence < parentPrecedence)
 		}
-		inner := concat(
+		if precedence < parentPrecedence {
+			return p.parenthesizedChain(node)
+		}
+		return concat(
 			p.expression(node.Left, leftPrecedence),
 			text(" "+operator+" "),
 			p.expression(node.Right, rightPrecedence),
 		)
-		if precedence < parentPrecedence {
-			return parenthesized(inner)
-		}
-		return inner
 	case *ast.TernaryExpression:
 		inner := concat(
 			p.expression(node.Value, ast.PrecedenceTernary+1), text(" if "),

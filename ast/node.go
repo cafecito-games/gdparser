@@ -64,6 +64,11 @@ type Comment struct {
 	Trivia
 	Text          string `json:"text"`
 	Documentation bool   `json:"documentation,omitempty"`
+	// TrailsHeader reports that the comment ended the line of the header whose
+	// block it is the first statement of, as in "if x:  # why". Formatting keeps
+	// it on that line, where a tool reading same-line directives looks for it.
+	// It carries no meaning on a comment anywhere else.
+	TrailsHeader bool `json:"trails_header,omitempty"`
 }
 
 func (*Comment) node()      {}

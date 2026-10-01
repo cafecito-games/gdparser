@@ -16,7 +16,14 @@ type docConcat struct{ parts []doc }
 
 // docGroup emits its contents on one line when they fit in the remaining
 // budget, and otherwise takes every break directly inside it.
-type docGroup struct{ inner doc }
+type docGroup struct {
+	inner doc
+	// yielding says the group is measured only as far as the next place the line
+	// could break after it, rather than as far as the line must run if nothing
+	// after it breaks. A yielding group so stays on one line when it fits there
+	// itself, and leaves a break still needed to a group that follows it.
+	yielding bool
+}
 
 // docNest adds indentation levels to the breaks inside it.
 type docNest struct {
@@ -110,6 +117,8 @@ func endsWithLineComment(d doc) bool {
 
 func group(inner doc) doc { return docGroup{inner: inner} }
 
+func yieldingGroup(inner doc) doc { return docGroup{inner: inner, yielding: true} }
+
 func nest(levels int, inner doc) doc { return docNest{levels: levels, inner: inner} }
 
 func ifBroken(broken, flat doc) doc { return docIfBreak{broken: broken, flat: flat} }
@@ -157,7 +166,7 @@ func render(document doc, options Options) string {
 			stack = append(stack, command{indent: current.indent + node.levels, mode: current.mode, doc: node.inner})
 		case docGroup:
 			flat := command{indent: current.indent, mode: modeFlat, doc: node.inner}
-			if current.mode == modeFlat || fits(flat, stack, options.LineWidth-column, options) {
+			if current.mode == modeFlat || fits(flat, stack, options.LineWidth-column, node.yielding, options) {
 				stack = append(stack, flat)
 				continue
 			}
@@ -185,16 +194,21 @@ func render(document doc, options Options) string {
 }
 
 // fits reports whether next, followed by the already-queued rest, reaches a
-// break or ends within width columns.
-func fits(next command, rest []command, width int, options Options) bool {
+// break or ends within width columns. A group in the rest is taken to stay on
+// one line, unless yielding says that a group free to break counts as a break.
+func fits(next command, rest []command, width int, yielding bool, options Options) bool {
 	remaining := width
 	stack := []command{next}
 	restIndex := len(rest)
+	// inRest reports that next has been measured in full, so that everything
+	// still to measure comes after it.
+	inRest := false
 	for remaining >= 0 {
 		if len(stack) == 0 {
 			if restIndex == 0 {
 				return true
 			}
+			inRest = true
 			restIndex--
 			stack = append(stack, rest[restIndex])
 			continue
@@ -216,7 +230,11 @@ func fits(next command, rest []command, width int, options Options) bool {
 		case docNest:
 			stack = append(stack, command{indent: current.indent + node.levels, mode: current.mode, doc: node.inner})
 		case docGroup:
-			stack = append(stack, command{indent: current.indent, mode: modeFlat, doc: node.inner})
+			mode := modeFlat
+			if yielding && inRest {
+				mode = current.mode
+			}
+			stack = append(stack, command{indent: current.indent, mode: mode, doc: node.inner})
 		case docIfBreak:
 			chosen := node.flat
 			if current.mode == modeBreak {

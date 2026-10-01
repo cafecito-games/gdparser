@@ -547,10 +547,14 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 	if _, err := p.expect(token.Colon, "expected ':' before block"); err != nil {
 		return nil, token.Position{}, err
 	}
-	// The colon's line may end with a comment, and with the comments held back
-	// from the header's continuation lines, which have nowhere to sit inside the
-	// header. All of them open the block, which is the nearest scope the
-	// statement owns.
+	// The colon's line may end with a comment, which is marked as the header's
+	// own and leads the block so that formatting can put it back on that line.
+	// The comments held back from the header's continuation lines, which have
+	// nowhere to sit inside the header, open the block after it, since that is
+	// the nearest scope the statement owns.
+	if p.at(token.Comment) {
+		headerComments = append([]ast.Statement{headerComment(p.advance())}, headerComments...)
+	}
 	for p.at(token.Comment) {
 		headerComments = append(headerComments, commentNode(p.advance()))
 	}
@@ -578,7 +582,15 @@ func (p *parser) parseSuiteFor(forLambda, classBody bool) ([]ast.Statement, toke
 			body = append(body, next)
 		}
 		if p.at(token.Comment) {
-			body = append(body, commentNode(p.advance()))
+			if forLambda {
+				// A lambda's one-line body stays on its line, so the comment
+				// still ends it.
+				body = append(body, commentNode(p.advance()))
+			} else {
+				// Any other one-line body moves to a line of its own, and the
+				// comment stays on the line it was written on, the header's.
+				body = append([]ast.Statement{headerComment(p.advance())}, body...)
+			}
 		}
 		if p.inLambda && !p.at(token.Newline, token.Semicolon, token.EOF, token.Dedent) {
 			p.lambdaEnded = true
@@ -853,6 +865,13 @@ func (p *parser) peekPastComments() token.Token {
 		offset++
 	}
 	return p.peekN(offset)
+}
+
+// headerComment builds the comment that ended a block header's line.
+func headerComment(tok token.Token) *ast.Comment {
+	comment := commentNode(tok)
+	comment.TrailsHeader = true
+	return comment
 }
 
 func commentNode(tok token.Token) *ast.Comment {

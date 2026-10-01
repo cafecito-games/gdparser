@@ -258,6 +258,9 @@ Statements also record the formatting-relevant context the source gave them:
   lists expose the comments between their delimiters, and a `match` statement
   exposes those between its cases, each anchored to the item it was written
   against and marked when it ended that item's line.
+- A comment that ended a block header's line, as in `if x:  # why`, is the first
+  statement of that block with `TrailsHeader` set, which is what keeps it on the
+  header's line when the block is formatted.
 - String literals record their quote character and the triple-quoted and
   `r`-prefixed forms, so they can be requoted without re-lexing their escapes.
 
@@ -275,7 +278,9 @@ A construct that does not fit the column budget is broken one element per line.
 Call arguments, parameter lists, and conditions indent two levels, while arrays,
 dictionaries, and enums indent one, as the guide prescribes. Breaking a logical
 expression wraps it in parentheses and starts each continuation line with its
-`and` or `or` keyword.
+`and` or `or` keyword. Operands that precedence already parenthesizes, as in
+`(a + b) * c`, break the same way, before each operator, when they do not fit the
+line themselves.
 
 `format.FileWithOptions` takes a `format.Options` for tools that need to differ.
 Every field's zero value is the style guide default, so a partially populated
