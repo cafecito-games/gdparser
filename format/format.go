@@ -281,6 +281,9 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 		parts = append(parts, text(operator), p.expression(node.Value, 0))
 	}
 	header := concat(parts...)
+	if shorthand := p.shorthandAccessors(node); shorthand != nil {
+		return concat(header, text(": "), join(text(", "), shorthand))
+	}
 	if node.Getter == nil && node.Setter == nil {
 		return header
 	}
@@ -320,7 +323,45 @@ func (p *printer) variable(node *ast.VariableDeclaration) doc {
 		written++
 		addComments(written)
 	}
+	for _, name := range shorthandAccessorNames(node) {
+		accessors = append(accessors, hardLine, text(name))
+		written++
+		addComments(written)
+	}
 	return concat(header, concat(colon...), nest(1, concat(accessors...)))
+}
+
+// shorthandAccessors returns the "get = method" accessors of node when they are
+// to be written on the declaration's own line, and nil otherwise: a property
+// written with accessor bodies, or one whose shorthand accessors were written in
+// an indented block, keeps that block because it may also hold comments.
+func (p *printer) shorthandAccessors(node *ast.VariableDeclaration) []doc {
+	if node.AccessorBlock {
+		return nil
+	}
+	var out []doc
+	for _, name := range shorthandAccessorNames(node) {
+		out = append(out, text(name))
+	}
+	return out
+}
+
+// shorthandAccessorNames returns the shorthand accessors of node in source
+// order, each spelled as it is written.
+func shorthandAccessorNames(node *ast.VariableDeclaration) []string {
+	var out []string
+	getter := node.GetterName != ""
+	setter := node.SetterName != ""
+	if getter && setter && node.SetterKeywordSpan.Start.Offset < node.GetterKeywordSpan.Start.Offset {
+		return []string{"set = " + node.SetterName, "get = " + node.GetterName}
+	}
+	if getter {
+		out = append(out, "get = "+node.GetterName)
+	}
+	if setter {
+		out = append(out, "set = "+node.SetterName)
+	}
+	return out
 }
 
 func (p *printer) function(node *ast.FunctionDeclaration) doc {
@@ -355,6 +396,11 @@ func (p *printer) enum(node *ast.EnumDeclaration) doc {
 }
 
 func (p *printer) matchCase(matchCase ast.MatchCase) doc {
+	if len(matchCase.Patterns) == 0 {
+		// A case holding no pattern is the bare "pass" of a match that handles
+		// nothing.
+		return text("pass")
+	}
 	// A separating comma, the "when" of a guard and the branch's own colon all
 	// follow a pattern on its line, so a pattern or guard ending in a comment
 	// is parenthesized to keep them off it.
@@ -745,6 +791,12 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		}
 		entries := make([]item, len(node.Entries))
 		for index, entry := range node.Entries {
+			if entry.Value == nil {
+				// A dictionary pattern may test that a key is present without
+				// constraining its value, which is written as the key alone.
+				entries[index] = item{doc: p.headerExpression(entry.Key)}
+				continue
+			}
 			entries[index] = item{
 				doc: concat(
 					closeAfter(p.headerExpression(entry.Key), separator),
@@ -756,6 +808,10 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return p.collection(dictionaryLayout, entries, node.Comments)
 	case *ast.BindingPattern:
 		return text("var " + node.Name)
+	case *ast.WildcardPattern:
+		return text("_")
+	case *ast.RestPattern:
+		return text("..")
 	case *ast.LambdaExpression:
 		keyword := "func"
 		if node.Name != "" {

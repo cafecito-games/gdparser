@@ -490,7 +490,7 @@ func (l *lexer) scanOperator(start token.Position) error {
 	}{
 		{"<<=", token.ShiftLeftAssign}, {">>=", token.ShiftRightAssign},
 		{"&&", token.And}, {"||", token.Or},
-		{"...", token.Ellipsis},
+		{"...", token.Ellipsis}, {"..", token.Range},
 		{"**", token.DoubleStar}, {"->", token.Arrow}, {":=", token.InferAssign},
 		{"==", token.Equal}, {"!=", token.NotEqual}, {"<=", token.LessEqual},
 		{">=", token.GreaterEqual}, {"<<", token.ShiftLeft}, {">>", token.ShiftRight},

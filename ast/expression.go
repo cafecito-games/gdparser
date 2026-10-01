@@ -180,6 +180,27 @@ type BindingPattern struct {
 func (*BindingPattern) node()       {}
 func (*BindingPattern) expression() {}
 
+// WildcardPattern is the "_" pattern of a match branch, which matches any value
+// without binding it. Godot gives the lone underscore its own token, so the
+// wildcard is a pattern of its own rather than a name.
+type WildcardPattern struct {
+	Base
+}
+
+func (*WildcardPattern) node()       {}
+func (*WildcardPattern) expression() {}
+
+// RestPattern is the ".." pattern that lets an array or dictionary pattern
+// match a value holding more elements than the pattern lists. It must be the
+// last element of the pattern that holds it, and it may not stand on its own as
+// a branch's pattern.
+type RestPattern struct {
+	Base
+}
+
+func (*RestPattern) node()       {}
+func (*RestPattern) expression() {}
+
 // LambdaExpression is an anonymous function expression.
 type LambdaExpression struct {
 	Base

@@ -37,6 +37,19 @@ type VariableDeclaration struct {
 	GetterSpan        token.Span          `json:"getter_span,omitempty"`
 	GetterKeywordSpan token.Span          `json:"getter_keyword_span,omitempty"`
 	Setter            *PropertySetter     `json:"setter,omitempty"`
+	// GetterName and SetterName hold the method that a shorthand accessor
+	// names, as in "var x: get = _get_x, set = _set_x". A property is written
+	// either with shorthand accessors or with accessor bodies, never with both,
+	// so a declaration carries one form or the other.
+	GetterName        string     `json:"getter_name,omitempty"`
+	GetterNameSpan    token.Span `json:"getter_name_span,omitempty"`
+	SetterName        string     `json:"setter_name,omitempty"`
+	SetterNameSpan    token.Span `json:"setter_name_span,omitempty"`
+	SetterKeywordSpan token.Span `json:"setter_keyword_span,omitempty"`
+	// AccessorBlock reports that the accessors were written in an indented
+	// block. An accessor with a body always is, because its body needs one; a
+	// shorthand accessor may be written there or on the declaration's own line.
+	AccessorBlock bool `json:"accessor_block,omitempty"`
 }
 
 func (*VariableDeclaration) node()      {}
@@ -233,7 +246,9 @@ type EnumDeclaration struct {
 func (*EnumDeclaration) node()      {}
 func (*EnumDeclaration) statement() {}
 
-// MatchCase contains comma-separated patterns and a body.
+// MatchCase contains comma-separated patterns and a body. A case holding no
+// pattern is the bare "pass" that Godot accepts in a match body, which matches
+// nothing and runs nothing.
 type MatchCase struct {
 	Base
 	Patterns []Expression `json:"patterns"`

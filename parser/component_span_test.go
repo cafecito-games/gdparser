@@ -216,10 +216,10 @@ func TestRepeatedUnicodeAndMultilineComponentSpans(t *testing.T) {
 }
 
 func TestAdjacentScalarAndOptionalComponentSpans(t *testing.T) {
-	source := []byte("tool\nvar property: int:\n\tset:\n\t\tvar path = %Root/Child\n")
+	source := []byte("extends Node\nvar property: int:\n\tset:\n\t\tvar path = %Root/Child\n")
 	file := parseSpans(t, source)
 	directive := file.Statements[0].(*ast.Directive)
-	assertSpan(t, source, directive.KeywordSpan, "tool")
+	assertSpan(t, source, directive.KeywordSpan, "extends")
 	assertZeroSpan(t, directive.ExtendsSpan)
 
 	declaration := file.Statements[1].(*ast.VariableDeclaration)

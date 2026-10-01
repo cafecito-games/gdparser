@@ -186,9 +186,6 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 	case token.At:
 		stmt, err := p.parseAnnotation()
 		return stmt, !p.at(token.Newline) && !p.at(token.Comment), err
-	case token.Tool:
-		tok := p.advance()
-		return &ast.Directive{Base: base(tok.Span), Name: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
 	case token.Extends, token.ClassName:
 		stmt, err := p.parseDirective()
 		return stmt, false, err
@@ -196,7 +193,7 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 		stmt, err := p.parseVariable()
 		compound := statementHasBlockLambda(stmt)
 		if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
-			compound = compound || declaration.Getter != nil || declaration.Setter != nil
+			compound = compound || declaration.AccessorBlock
 		}
 		return stmt, compound, err
 	case token.Static:
@@ -211,7 +208,7 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 			stmt, err := p.parseVariableAfter(keyword, static, false)
 			compound := statementHasBlockLambda(stmt)
 			if declaration, ok := stmt.(*ast.VariableDeclaration); ok {
-				compound = compound || declaration.Getter != nil || declaration.Setter != nil
+				compound = compound || declaration.AccessorBlock
 			}
 			return stmt, compound, err
 		}
@@ -244,7 +241,10 @@ func (p *parser) parseStatement() (ast.Statement, bool, error) {
 	case token.Return:
 		stmt, err := p.parseReturn()
 		return stmt, statementHasBlockLambda(stmt), err
-	case token.Pass, token.Break, token.Continue:
+	case token.Assert:
+		stmt, err := p.parseAssert()
+		return stmt, false, err
+	case token.Pass, token.Break, token.Continue, token.Breakpoint:
 		tok := p.advance()
 		return &ast.KeywordStatement{Base: base(tok.Span), Keyword: tok.Lexeme, KeywordSpan: tok.Span}, false, nil
 	default:
@@ -388,47 +388,40 @@ func statementHasBlockLambda(statement ast.Statement) bool {
 	return found
 }
 
-// nameKind says which keywords Godot still accepts where a name is expected.
-// The set differs by position, so each name position names its own kind.
-type nameKind int
-
-const (
-	// declaredName is a name Godot declares or binds: a variable, a function,
-	// a parameter, a class, a signal, an enum or its member, a loop variable,
-	// a lambda, or a type. Only the contextual keywords may be used there.
-	declaredName nameKind = iota
-	// memberName follows a dot in an expression, where Godot accepts every
-	// keyword that is not a literal.
-	memberName
-	// annotationName follows '@', where Godot reads the name as text and so
-	// accepts every keyword.
-	annotationName
-)
-
-// isNameToken reports whether tok may stand for a name of the given kind.
-// Godot keeps "match" and "tool" usable as names, so a keyword is not reserved
-// everywhere, and after a dot or an '@' it relaxes further still.
-func isNameToken(tok token.Token, kind nameKind) bool {
-	if tok.Type == token.Identifier {
-		return true
-	}
-	if !token.IsKeyword(tok.Type) {
-		return false
-	}
-	switch kind {
-	case annotationName:
-		return true
-	case memberName:
-		return tok.Type != token.True && tok.Type != token.False && tok.Type != token.Null
-	}
-	return tok.Type == token.Match || tok.Type == token.Tool
-}
-
-func (p *parser) expectName(kind nameKind, message string) (token.Token, error) {
-	if isNameToken(p.peek(), kind) {
+// expectIdentifier consumes a token that may stand where GDScript expects an
+// identifier: a declared name, a parameter, a loop variable, a bind, or an
+// element of a type name.
+func (p *parser) expectIdentifier(message string) (token.Token, error) {
+	if token.IsIdentifier(p.peek().Type) {
 		return p.advance(), nil
 	}
 	return token.Token{}, p.error(p.peek(), message)
+}
+
+// expectNodeName consumes a token that may name a node, which is what Godot
+// accepts both for a member after a dot and for a step of a "$" or "%" path.
+func (p *parser) expectNodeName(message string) (token.Token, error) {
+	if token.IsNodeName(p.peek().Type) {
+		return p.advance(), nil
+	}
+	return token.Token{}, p.error(p.peek(), message)
+}
+
+// expectAnnotationName consumes the name of the annotation introduced by at.
+// Godot scans "@" and the name as a single token, so the name may be spelled
+// with any reserved word, but nothing may come between the two.
+func (p *parser) expectAnnotationName(at token.Token) (token.Token, error) {
+	name := p.peek()
+	if !isWord(name.Type) || name.Span.Start.Offset != at.Span.End.Offset {
+		return token.Token{}, p.error(name, "expected annotation name")
+	}
+	return p.advance(), nil
+}
+
+// isWord reports whether typ is spelled as a word in source, which is every
+// identifier and every reserved word including the literals.
+func isWord(typ token.Type) bool {
+	return typ == token.Identifier || typ == token.Underscore || token.IsKeyword(typ)
 }
 
 func base(span token.Span) ast.Base { return ast.Base{SourceSpan: span} }
