@@ -273,6 +273,66 @@ func nextCodeIndent(source []byte, offset int) (columns, start int, ok bool) {
 	}
 }
 
+// opensBlock reports whether the line holding offset ends with the colon that
+// opens a block. A comma on such a line separates the parts of the line's
+// header, as a match branch's patterns are separated, rather than ending the
+// lambda body the line sits in.
+func opensBlock(source []byte, offset int) bool {
+	last := byte(0)
+	for offset < len(source) {
+		switch c := source[offset]; c {
+		case '\n':
+			return last == ':'
+		case '\r', ' ', '\t':
+		case '#':
+			// The rest of the line is a comment, so the character before it is
+			// the last the line holds.
+			return last == ':'
+		case '"', '\'':
+			end, ok := skipString(source, offset)
+			if !ok {
+				return false
+			}
+			offset, last = end, source[end-1]
+			continue
+		default:
+			last = c
+		}
+		offset++
+	}
+	return last == ':'
+}
+
+// skipString returns the offset just past the string literal starting at
+// offset, and reports whether it is terminated.
+func skipString(source []byte, offset int) (int, bool) {
+	quote := source[offset]
+	triple := offset+2 < len(source) && source[offset+1] == quote && source[offset+2] == quote
+	offset++
+	if triple {
+		offset += 2
+	}
+	for offset < len(source) {
+		switch source[offset] {
+		case '\\':
+			offset++
+		case quote:
+			if !triple {
+				return offset + 1, true
+			}
+			if offset+2 < len(source) && source[offset+1] == quote && source[offset+2] == quote {
+				return offset + 3, true
+			}
+		case '\n':
+			if !triple {
+				return offset, false
+			}
+		}
+		offset++
+	}
+	return offset, triple
+}
+
 // closesLambdaLayout reports whether c, as the first character of a line,
 // terminates an enclosing multiline lambda body.
 func closesLambdaLayout(c byte) bool {
@@ -409,7 +469,8 @@ func (l *lexer) scanOperator(start token.Position) error {
 	remaining := string(l.source[l.offset:])
 	for _, op := range operators {
 		if strings.HasPrefix(remaining, op.text) {
-			if op.typ == token.Comma && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
+			if op.typ == token.Comma && len(l.layouts) > 0 && l.depth == l.layoutDepth() &&
+				!opensBlock(l.source, l.offset) {
 				l.endLambdaLayout(start)
 			}
 			if (op.typ == token.RParen || op.typ == token.RBracket || op.typ == token.RBrace) && len(l.layouts) > 0 && l.depth == l.layoutDepth() {
