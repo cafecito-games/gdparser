@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/cafecito-games/gdparser/internal/encoding"
 )
 
 // Position is a zero-based byte offset and a one-based line and column.
@@ -82,9 +84,12 @@ func ParseFile(filename string, source []byte) (*File, error) {
 		return nil, parseError(filename, source, offset, "invalid UTF-8")
 	}
 
+	// A leading byte order mark says how the file is encoded rather than
+	// anything the sidecar grammar can read, so the UID begins past it.
+	start := encoding.SkipByteOrderMark(source)
 	lineEnd := len(source)
-	for i, c := range source {
-		if c == '\r' || c == '\n' {
+	for i := start; i < len(source); i++ {
+		if c := source[i]; c == '\r' || c == '\n' {
 			lineEnd = i
 			break
 		}
@@ -101,16 +106,16 @@ func ParseFile(filename string, source []byte) (*File, error) {
 		return nil, parseError(filename, source, documentEnd, "expected end of UID file")
 	}
 
-	value := string(source[:lineEnd])
+	value := string(source[start:lineEnd])
 	const prefix = "uid://"
 	if !strings.HasPrefix(value, prefix) {
-		return nil, parseError(filename, source, firstMismatch(value, prefix), "expected UID beginning with uid://")
+		return nil, parseError(filename, source, start+firstMismatch(value, prefix), "expected UID beginning with uid://")
 	}
 	if len(value) == len(prefix) {
-		return nil, parseError(filename, source, len(prefix), "UID value must not be empty")
+		return nil, parseError(filename, source, start+len(prefix), "UID value must not be empty")
 	}
 	if value == "uid://<invalid>" {
-		return newFile(filename, source, lineEnd, value), nil
+		return newFile(filename, source, start, lineEnd, value), nil
 	}
 	// Keep the identifier body syntactic and opaque. Resolution to Godot's
 	// numeric ResourceUID representation is a separate engine-level concern,
@@ -122,16 +127,16 @@ func ParseFile(filename string, source []byte) (*File, error) {
 				continue
 			}
 			if c < '0' || c > '9' {
-				return nil, parseError(filename, source, i, "UID may contain only ASCII letters and digits")
+				return nil, parseError(filename, source, start+i, "UID may contain only ASCII letters and digits")
 			}
 		}
 	}
 
-	return newFile(filename, source, lineEnd, value), nil
+	return newFile(filename, source, start, lineEnd, value), nil
 }
 
-func newFile(filename string, source []byte, lineEnd int, value string) *File {
-	uidSpan := Span{Start: positionAt(source, 0), End: positionAt(source, lineEnd)}
+func newFile(filename string, source []byte, start, lineEnd int, value string) *File {
+	uidSpan := Span{Start: positionAt(source, start), End: positionAt(source, lineEnd)}
 	return &File{
 		Base: Base{SourceSpan: Span{Start: positionAt(source, 0), End: positionAt(source, len(source))}},
 		Name: filename,
@@ -174,7 +179,9 @@ func parseError(filename string, source []byte, offset int, message string) erro
 
 func positionAt(source []byte, offset int) Position {
 	position := Position{Offset: offset, Line: 1, Column: 1}
-	for current := 0; current < offset; {
+	// A byte order mark is given no column of its own, so the first real
+	// character of the file still reports as 1:1.
+	for current := encoding.SkipByteOrderMark(source); current < offset; {
 		r, size := utf8.DecodeRune(source[current:])
 		if r == '\r' {
 			if current+size < offset && source[current+size] == '\n' {

@@ -70,9 +70,11 @@ func TestLexSkipsByteOrderMark(t *testing.T) {
 	if tokens[0].Type != token.Pass {
 		t.Fatalf("first token = %s, want %s", tokens[0].Type, token.Pass)
 	}
-	// The mark occupies no column, so the statement still starts the line.
-	if start := tokens[0].Span.Start; start.Line != 1 || start.Column != 1 {
-		t.Fatalf("first token at %d:%d, want 1:1", start.Line, start.Column)
+	// The mark occupies no column, so the statement still starts the line. Its
+	// bytes are still counted, so an offset stays absolute against the file.
+	want := token.Position{Offset: 3, Line: 1, Column: 1}
+	if start := tokens[0].Span.Start; start != want {
+		t.Fatalf("first token start = %+v, want %+v", start, want)
 	}
 }
 

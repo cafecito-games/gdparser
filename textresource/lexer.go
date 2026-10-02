@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/cafecito-games/gdparser/internal/encoding"
 	"github.com/cafecito-games/gdparser/token"
 )
 
@@ -55,7 +56,9 @@ type scanner struct {
 }
 
 func lex(source []byte) ([]lexToken, error) {
-	s := scanner{source: source, line: 1, column: 1}
+	// A leading byte order mark says how the file is encoded rather than
+	// anything a Variant value can read, so the scan starts past it.
+	s := scanner{source: source, offset: encoding.SkipByteOrderMark(source), line: 1, column: 1}
 	var result []lexToken
 	for {
 		s.skipHorizontal()
@@ -144,13 +147,13 @@ func lex(source []byte) ([]lexToken, error) {
 				result = append(result, tok)
 				continue
 			}
-			if (b == '-' || b == '+') && s.offset+1 < len(s.source) && isBareStart(s.source[s.offset+1]) {
+			if (b == '-' || b == '+') && s.offset+1 < len(s.source) && isBareStart(s.source[s.offset+1:]) {
 				s.advanceByte()
 				text := string(b) + s.readBare()
 				result = append(result, s.tok(tIdentifier, start, text, text))
 				continue
 			}
-			if isBareStart(b) {
+			if isBareStart(s.source[s.offset:]) {
 				text := s.readBare()
 				result = append(result, s.tok(tIdentifier, start, text, text))
 				continue
@@ -203,8 +206,20 @@ func (s *scanner) advanceRune() {
 	s.offset += n
 	s.column++
 }
-func isBareStart(b byte) bool {
-	return b == '_' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= 0x80
+
+// isBareStart reports whether source begins a bare word. A rune above ASCII has
+// to be a letter, because isBareContinue would not carry it either: accepting a
+// rune that cannot continue a word would leave readBare with nothing to read and
+// the scan where it started.
+func isBareStart(source []byte) bool {
+	r, size := utf8.DecodeRune(source)
+	if size == 0 {
+		return false
+	}
+	if r < utf8.RuneSelf {
+		return r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+	}
+	return unicode.IsLetter(r)
 }
 func isBareContinue(r rune) bool {
 	return r == '_' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r)

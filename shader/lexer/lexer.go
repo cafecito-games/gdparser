@@ -6,12 +6,22 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/cafecito-games/gdparser/internal/encoding"
 	"github.com/cafecito-games/gdparser/shader/token"
 )
 
-// Lex tokenizes source. Comments and preprocessor lines are retained.
+// Lex tokenizes source. Comments and preprocessor lines are retained. A leading
+// byte order mark is skipped, since it says how the file is encoded rather than
+// anything the shading language can read.
 func Lex(filename string, source []byte) ([]token.Token, error) {
-	l := lexer{filename: filename, source: source, line: 1, column: 1, lineStart: true}
+	l := lexer{
+		filename:  filename,
+		source:    source,
+		offset:    encoding.SkipByteOrderMark(source),
+		line:      1,
+		column:    1,
+		lineStart: true,
+	}
 	return l.lex()
 }
 
