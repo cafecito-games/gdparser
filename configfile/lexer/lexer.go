@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cafecito-games/gdparser/configfile/token"
+	"github.com/cafecito-games/gdparser/internal/encoding"
 )
 
 // Error describes invalid source encountered by the lexer.
@@ -18,9 +19,11 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Position, e.Message) }
 
-// Lex returns every token in source, including comments and newlines.
+// Lex returns every token in source, including comments and newlines. A leading
+// byte order mark is skipped, since it says how the file is encoded rather than
+// anything the ConfigFile grammar can read.
 func Lex(source []byte) ([]token.Token, error) {
-	l := &lexer{source: source, line: 1, column: 1}
+	l := &lexer{source: source, offset: encoding.SkipByteOrderMark(source), line: 1, column: 1}
 	if err := l.run(); err != nil {
 		return nil, err
 	}

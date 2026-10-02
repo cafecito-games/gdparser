@@ -248,6 +248,14 @@ structure and comments, but it may normalize indentation, spacing, parentheses,
 blank lines, and literal spelling. If exact source trivia is required, retain
 the original source alongside the AST.
 
+Text encoding is not syntax in any of the supported formats. Every parser skips
+a leading UTF-8 byte order mark, as Godot does when it decodes a file, and reads
+`\r\n` line endings. Neither survives into formatted output: emission is always
+LF without a byte order mark, which is what Godot's own writers produce. A mark
+is skipped rather than sliced away, so spans keep byte offsets that are absolute
+against the file on disk while the first character of the file still reports at
+line 1, column 1.
+
 A comment written on a line of its own neither opens nor closes a block, which
 is how Godot's tokenizer treats it. Its indentation only chooses the block it
 belongs to, and the next line of code settles that: a comment written at an

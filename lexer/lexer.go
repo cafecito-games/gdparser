@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/cafecito-games/gdparser/internal/encoding"
 	"github.com/cafecito-games/gdparser/token"
 )
 
@@ -18,9 +19,6 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Position, e.Message) }
-
-// byteOrderMark is the UTF-8 encoding of U+FEFF.
-var byteOrderMark = []byte{0xef, 0xbb, 0xbf}
 
 // Lex returns all tokens in source, with indentation emitted as INDENT and
 // DEDENT. Nothing drives the scan, so a line break is taken to carry no meaning
@@ -170,14 +168,17 @@ type lexer struct {
 }
 
 func newLexer(source []byte) *lexer {
-	l := &lexer{source: source, line: 1, column: 1, atStart: true, indents: []int{0}}
 	// A UTF-8 byte order mark carries no syntax. Godot's style guide asks for
 	// files without one, so it is skipped rather than rejected, which lets a
 	// formatter rewrite such a file cleanly.
-	if bytes.HasPrefix(source, byteOrderMark) {
-		l.offset = len(byteOrderMark)
+	return &lexer{
+		source:  source,
+		offset:  encoding.SkipByteOrderMark(source),
+		line:    1,
+		column:  1,
+		atStart: true,
+		indents: []int{0},
 	}
-	return l
 }
 
 // setIndents replaces the indentation stack without writing through a slice an
