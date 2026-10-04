@@ -313,8 +313,11 @@ loosest operator and never reads as though the parentheses had regrouped it.
 Where the expression already holds brackets that can take the break — a call's
 arguments, a collection, or the parentheses precedence requires — the chain
 leaves the break to them and stays whole, rather than adding punctuation the
-source did not have. An `and`/`or` chain takes the break even then, since the
-guide names where its keyword belongs on a continuation line.
+source did not have. It leaves it to them only as far as they reach, though:
+where the line still runs past the budget with those brackets broken, and
+breaking at the operators is what brings it back inside, the chain breaks too.
+An `and`/`or` chain takes the break even where a bracket could, since the guide
+names where its keyword belongs on a continuation line.
 
 `format.FileWithOptions` takes a `format.Options` for tools that need to differ.
 Every field's zero value is the style guide default, so a partially populated
