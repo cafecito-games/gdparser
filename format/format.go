@@ -837,6 +837,17 @@ func (c chain) holdsABreak() bool {
 	return false
 }
 
+// holdsAHardBreak reports whether any operand holds a break that is taken
+// wherever it stands.
+func (c chain) holdsAHardBreak() bool {
+	for _, operand := range c.operands {
+		if holdsAHardBreak(operand) {
+			return true
+		}
+	}
+	return false
+}
+
 // parenthesizedChain renders a chain inside the parentheses precedence requires
 // around it, breaking before each operator. The chain breaks only when it cannot
 // fit the line by itself: where a call after it could take the break instead, the
@@ -859,6 +870,25 @@ func wrappedChain(links chain) doc {
 	))
 }
 
+// unparenthesizedChain renders a chain precedence has not parenthesized. A
+// bracket an operand already holds is the shorter read, so the chain stays whole
+// and leaves the break to it where the line reaches that bracket inside the
+// budget; where it does not, the chain breaks at its operators rather than
+// running past the budget with a bracket broken inside it for nothing.
+func unparenthesizedChain(links chain) doc {
+	if !links.holdsABreak() {
+		return wrappedChain(links)
+	}
+	// An operand that holds a hard break fixes where the lines around it land,
+	// and the closing bracket of a construct inside such an operand is written
+	// knowing whether this chain's parentheses are there, so the chain keeps the
+	// whole shape it was measured for.
+	if links.holdsAHardBreak() {
+		return links.whole()
+	}
+	return preferring(links.whole(), wrappedChain(links))
+}
+
 // chainBody returns the indented contents of a broken chain and the line that
 // closes them. Continuation lines are part of the same expression, so they take
 // two indentation levels.
@@ -873,9 +903,9 @@ func chainBody(links chain) (doc, doc) {
 // chainOperands renders the operands of a chain, counting the chain as a bracket
 // around them only where the parentheses are there by the time anything inside
 // can break. Where precedence requires them they are written outright, and a
-// logical chain that holds a line of its own cannot fit one, so it breaks and
-// writes them too. Any other chain stays whole wherever an operand holds such a
-// line, so the closing bracket of a construct inside it lands exactly where it
+// logical chain always breaks, so it writes them too. Any other chain stays
+// whole wherever an operand holds a break taken wherever it stands, so the
+// closing bracket of a construct that leaves a block open lands exactly where it
 // would have with no chain around it.
 func (p *printer) chainOperands(bracketed bool, render func()) {
 	if bracketed {
@@ -968,10 +998,10 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		if parenthesize {
 			return parenthesizedChain(links)
 		}
-		if !logical && links.holdsABreak() {
-			return links.whole()
+		if logical {
+			return wrappedChain(links)
 		}
-		return wrappedChain(links)
+		return unparenthesizedChain(links)
 	case *ast.TernaryExpression:
 		parenthesize := ast.PrecedenceTernary < parentPrecedence
 		var links chain
@@ -979,10 +1009,7 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		if parenthesize {
 			return parenthesizedChain(links)
 		}
-		if links.holdsABreak() {
-			return links.whole()
-		}
-		return wrappedChain(links)
+		return unparenthesizedChain(links)
 	case *ast.CallExpression:
 		return concat(
 			p.expression(node.Callee, ast.PrecedenceCall),

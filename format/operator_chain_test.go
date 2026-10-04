@@ -87,6 +87,41 @@ func TestUnparenthesizedOperatorChainGainsParenthesesAndBreaks(t *testing.T) {
 	}
 }
 
+// A chain leaves the break to a bracket it holds only where doing so keeps the
+// line inside the budget. Where the line still runs past it, the chain breaks at
+// its operators, whatever construct is around it.
+func TestOperatorChainBreaksWhereABracketItHoldsCannotSaveTheLine(t *testing.T) {
+	for _, test := range []struct{ name, source, want string }{
+		{
+			// The call's own brackets break, and the chain still does not fit, so
+			// the chain breaks too rather than being left past the budget.
+			"a chain nested in a call it does not fit",
+			"func go(first: int, second: int) -> void:\n\tassert_equal(first, second, \"the first half of a message that is already quite long, \" + \"and a second half that pushes the pair well past the budget\" + str(first))\n",
+			"func go(first: int, second: int) -> void:\n\tassert_equal(\n\t\t\tfirst,\n\t\t\tsecond,\n\t\t\t(\n\t\t\t\t\t\"the first half of a message that is already quite long, \"\n\t\t\t\t\t+ \"and a second half that pushes the pair well past the budget\"\n\t\t\t\t\t+ str(first)\n\t\t\t)\n\t)\n",
+		},
+		{
+			// The chain reaches the call's bracket inside the budget, so the call
+			// takes the break and the chain stays whole, as it does at a
+			// statement's own level.
+			"a chain nested in a call that the call's break saves",
+			"func go(first: int) -> void:\n\tassert_equal(first, 1, \"a short prefix \" + describe_the_value_at_length(first, \"a second argument that is long\"))\n",
+			"func go(first: int) -> void:\n\tassert_equal(\n\t\t\tfirst,\n\t\t\t1,\n\t\t\t\"a short prefix \" + describe_the_value_at_length(\n\t\t\t\t\tfirst,\n\t\t\t\t\t\"a second argument that is long\"\n\t\t\t)\n\t)\n",
+		},
+		{
+			// The operand is longer than a line of its own, so breaking the chain
+			// would not bring the line inside the budget and the chain keeps the
+			// shape whose brackets do break.
+			"a chain breaking cannot save stays whole",
+			"func describe(first: int, second: int) -> String:\n\treturn \"a format string that is already wider than the whole column budget allows for, with %d and %d in it\" % [first, second]\n",
+			"func describe(first: int, second: int) -> String:\n\treturn \"a format string that is already wider than the whole column budget allows for, with %d and %d in it\" % [\n\t\tfirst,\n\t\tsecond,\n\t]\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertFormats(t, "nested.gd", test.source, test.want)
+		})
+	}
+}
+
 // A conditional expression is the style guide's own example of a construct that
 // multiple lines make more readable, and it wraps before each "else" so that a
 // value stays with the condition that chooses it.

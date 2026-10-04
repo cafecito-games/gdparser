@@ -54,12 +54,22 @@ type docIfBreak struct {
 	flat   doc
 }
 
-func (docText) isDoc()    {}
-func (docConcat) isDoc()  {}
-func (docGroup) isDoc()   {}
-func (docNest) isDoc()    {}
-func (docLine) isDoc()    {}
-func (docIfBreak) isDoc() {}
+// docAlternatives emits instead only where preferred runs its first line past
+// the budget and instead keeps every line inside it, and emits preferred
+// otherwise. It is how a construct that could take the break itself leaves it to
+// a bracket it holds, except where that bracket is not enough and breaking is.
+type docAlternatives struct {
+	preferred doc
+	instead   doc
+}
+
+func (docText) isDoc()         {}
+func (docConcat) isDoc()       {}
+func (docGroup) isDoc()        {}
+func (docNest) isDoc()         {}
+func (docLine) isDoc()         {}
+func (docIfBreak) isDoc()      {}
+func (docAlternatives) isDoc() {}
 
 func text(value string) doc { return docText{text: value} }
 
@@ -112,6 +122,8 @@ func endsWithLineComment(d doc) bool {
 		return endsWithLineComment(node.inner)
 	case docIfBreak:
 		return endsWithLineComment(node.broken) || endsWithLineComment(node.flat)
+	case docAlternatives:
+		return endsWithLineComment(node.preferred) || endsWithLineComment(node.instead)
 	default:
 		return false
 	}
@@ -154,6 +166,10 @@ func holdsABreak(document doc) bool {
 		return holdsALine(node.inner)
 	case docIfBreak:
 		return holdsABreak(node.broken) || holdsABreak(node.flat)
+	case docAlternatives:
+		// The layout it falls back to writes parentheses of its own, so only the
+		// one it prefers says whether a break is already there to be taken.
+		return holdsABreak(node.preferred)
 	case docLine:
 		// A hard line is taken wherever it stands, with no bracket needed to
 		// make the continuation legal.
@@ -181,8 +197,40 @@ func holdsALine(document doc) bool {
 		return holdsALine(node.inner)
 	case docIfBreak:
 		return holdsALine(node.broken) || holdsALine(node.flat)
+	case docAlternatives:
+		return holdsALine(node.preferred) || holdsALine(node.instead)
 	case docLine:
 		return true
+	case docText:
+		return strings.Contains(node.text, "\n")
+	}
+	return false
+}
+
+// holdsAHardBreak reports whether document has a break that is taken wherever
+// it stands: the body of a block lambda, a match statement's case list, or a
+// literal that already spans lines. Such a break fixes the shape of the lines
+// around it, and a construct that writes punctuation as it breaks is built
+// knowing where it lands, so what holds one is laid out as it was measured
+// rather than chosen between two layouts.
+func holdsAHardBreak(document doc) bool {
+	switch node := document.(type) {
+	case docConcat:
+		for _, part := range node.parts {
+			if holdsAHardBreak(part) {
+				return true
+			}
+		}
+	case docNest:
+		return holdsAHardBreak(node.inner)
+	case docGroup:
+		return holdsAHardBreak(node.inner)
+	case docIfBreak:
+		return holdsAHardBreak(node.broken) || holdsAHardBreak(node.flat)
+	case docAlternatives:
+		return holdsAHardBreak(node.preferred) || holdsAHardBreak(node.instead)
+	case docLine:
+		return node.kind == lineHard
 	case docText:
 		return strings.Contains(node.text, "\n")
 	}
@@ -192,6 +240,12 @@ func holdsALine(document doc) bool {
 func nest(levels int, inner doc) doc { return docNest{levels: levels, inner: inner} }
 
 func ifBroken(broken, flat doc) doc { return docIfBreak{broken: broken, flat: flat} }
+
+// preferring returns the layout preferred where its first line fits, and
+// instead where it does not.
+func preferring(preferred, instead doc) doc {
+	return docAlternatives{preferred: preferred, instead: instead}
+}
 
 var (
 	spaceLine = docLine{kind: lineSpace}
@@ -245,6 +299,20 @@ func render(document doc, options Options) string {
 			chosen := node.flat
 			if current.mode == modeBreak {
 				chosen = node.broken
+			}
+			stack = append(stack, command{indent: current.indent, mode: current.mode, doc: chosen})
+		case docAlternatives:
+			chosen := node.preferred
+			if current.mode == modeBreak {
+				width := options.LineWidth - column
+				preferred := command{indent: current.indent, mode: modeBreak, doc: node.preferred}
+				instead := command{indent: current.indent, mode: modeBreak, doc: node.instead}
+				// Breaking is worth the punctuation it writes only where it is
+				// what brings the lines inside the budget: an operand too long
+				// for a line of its own is no shorter for being given one.
+				if !fitsFirstLine(preferred, stack, width, options) && fitsEveryLine(instead, stack, width, options) {
+					chosen = node.instead
+				}
 			}
 			stack = append(stack, command{indent: current.indent, mode: current.mode, doc: chosen})
 		case docLine:
@@ -311,9 +379,102 @@ func fits(next command, rest []command, width int, yielding bool, options Option
 				chosen = node.broken
 			}
 			stack = append(stack, command{indent: current.indent, mode: current.mode, doc: chosen})
+		case docAlternatives:
+			// Measured flat the two layouts are the same text, and measured for
+			// a break the one it prefers is the shorter read.
+			stack = append(stack, command{indent: current.indent, mode: current.mode, doc: node.preferred})
 		case docLine:
 			if current.mode == modeBreak {
 				return true
+			}
+			switch node.kind {
+			case lineHard:
+				return false
+			case lineSpace:
+				remaining--
+			}
+		}
+	}
+	return false
+}
+
+// fitsFirstLine reports whether the line next begins stays within width when the
+// groups inside it break as the renderer would break them. A group that cannot
+// fit the line flat breaks here as it will there, so the measurement ends at the
+// first break actually taken, which is where the line next writes ends. Where no
+// break is taken the line runs on into the already-queued rest.
+func fitsFirstLine(next command, rest []command, width int, options Options) bool {
+	return fitsLaidOut(next, rest, width, options, false)
+}
+
+// fitsEveryLine reports whether every line next writes stays within the budget,
+// laid out as the renderer would lay it out. The line it ends on runs into the
+// already-queued rest, as the first line does.
+func fitsEveryLine(next command, rest []command, width int, options Options) bool {
+	return fitsLaidOut(next, rest, width, options, true)
+}
+
+// fitsLaidOut measures next, and the rest the line it ends on runs into, with the
+// groups inside it broken as the renderer would break them. It stops at the first
+// break taken within next unless everyLine says to go on measuring the lines
+// after it, each from the indentation it starts at.
+func fitsLaidOut(next command, rest []command, width int, options Options, everyLine bool) bool {
+	remaining := width
+	stack := []command{next}
+	restIndex := len(rest)
+	// inRest reports that next has been measured in full, so that the line being
+	// measured is the one it ends on.
+	inRest := false
+	for remaining >= 0 {
+		if len(stack) == 0 {
+			if restIndex == 0 {
+				return true
+			}
+			inRest = true
+			restIndex--
+			stack = append(stack, rest[restIndex])
+			continue
+		}
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch node := current.doc.(type) {
+		case docText:
+			if strings.ContainsRune(node.text, '\n') {
+				return false
+			}
+			remaining -= textWidth(node.text, options)
+		case docConcat:
+			for index := len(node.parts) - 1; index >= 0; index-- {
+				stack = append(stack, command{indent: current.indent, mode: current.mode, doc: node.parts[index]})
+			}
+		case docNest:
+			stack = append(stack, command{indent: current.indent + node.levels, mode: current.mode, doc: node.inner})
+		case docGroup:
+			mode := modeFlat
+			if current.mode == modeBreak {
+				pending := make([]command, 0, restIndex+len(stack))
+				pending = append(pending, rest[:restIndex]...)
+				pending = append(pending, stack...)
+				if !fits(command{indent: current.indent, mode: modeFlat, doc: node.inner}, pending, remaining, node.yielding, options) {
+					mode = modeBreak
+				}
+			}
+			stack = append(stack, command{indent: current.indent, mode: mode, doc: node.inner})
+		case docIfBreak:
+			chosen := node.flat
+			if current.mode == modeBreak {
+				chosen = node.broken
+			}
+			stack = append(stack, command{indent: current.indent, mode: current.mode, doc: chosen})
+		case docAlternatives:
+			stack = append(stack, command{indent: current.indent, mode: current.mode, doc: node.preferred})
+		case docLine:
+			if current.mode == modeBreak {
+				if !everyLine || inRest {
+					return true
+				}
+				remaining = options.LineWidth - current.indent*options.indentColumns()
+				continue
 			}
 			switch node.kind {
 			case lineHard:
