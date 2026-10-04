@@ -47,6 +47,15 @@ func TestBlockLambdaEndingANestedCollectionKeepsItsComma(t *testing.T) {
 			"func f():\n\tg(\n\t\t\t1,\n\t\t\th(\n\t\t\t\t\t2,\n\t\t\t\t\tfunc():\n\t\t\t\t\t\tpass,\n\t\t\t),\n\t\t\t3\n\t)\n",
 		},
 		{
+			// The chain leaves the break to the call's brackets and stays whole,
+			// so the bracket lands at the statement's own indentation and needs
+			// no comma before it, exactly as it would with no chain around it.
+			"a call in a chain that stays whole",
+			format.GodotStyle(),
+			"func f(a):\n\tvar x = a + g(func():\n\t\tpass)\n",
+			"func f(a):\n\tvar x = a + g(\n\t\t\tfunc():\n\t\t\t\tpass\n\t)\n",
+		},
+		{
 			"a call in a logical chain",
 			format.GodotStyle(),
 			"func f(a):\n\tvar x = a and h(func():\n\t\tpass)\n",

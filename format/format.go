@@ -870,6 +870,19 @@ func chainBody(links chain) (doc, doc) {
 	return body, softLine
 }
 
+// chainOperands renders the operands of a chain, counting the chain as a
+// bracket around them only when it is certain to have one. A chain that adds its
+// own parentheses as it breaks stays whole wherever an operand holds a line of
+// its own, so the closing bracket of a construct inside it lands exactly where
+// it would have with no chain around it.
+func (p *printer) chainOperands(bracketed bool, render func()) {
+	if bracketed {
+		p.inBrackets(render)
+		return
+	}
+	render()
+}
+
 // binaryChain flattens a chain of binary operators that bind at one level into
 // the operands they separate. Every binary operator is left-associative, so the
 // chain runs down the left operands. An operand that binds tighter stays whole,
@@ -944,21 +957,24 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return inner
 	case *ast.BinaryExpression:
 		operator := p.operatorText(node.Operator)
-		var links chain
-		p.inBrackets(func() { links = p.binaryChain(node) })
-		if ast.OperatorPrecedence(operator) < parentPrecedence {
-			return parenthesizedChain(links)
-		}
+		parenthesize := ast.OperatorPrecedence(operator) < parentPrecedence
 		// The style guide names where and/or belongs on a continuation line, so
 		// a logical chain takes the break even when something inside it could.
-		if !isLogicalOperator(operator) && links.holdsABreak() {
+		logical := isLogicalOperator(operator)
+		var links chain
+		p.chainOperands(parenthesize || logical, func() { links = p.binaryChain(node) })
+		if parenthesize {
+			return parenthesizedChain(links)
+		}
+		if !logical && links.holdsABreak() {
 			return links.whole()
 		}
 		return wrappedChain(links)
 	case *ast.TernaryExpression:
+		parenthesize := ast.PrecedenceTernary < parentPrecedence
 		var links chain
-		p.inBrackets(func() { links = p.ternaryChain(node) })
-		if ast.PrecedenceTernary < parentPrecedence {
+		p.chainOperands(parenthesize, func() { links = p.ternaryChain(node) })
+		if parenthesize {
 			return parenthesizedChain(links)
 		}
 		if links.holdsABreak() {
