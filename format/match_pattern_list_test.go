@@ -11,14 +11,14 @@ import (
 // A comma-separated pattern list can be broken only with a backslash
 // continuation: Godot reads a bare line break inside one as the end of the
 // list, and a parenthesized group is not a pattern. A list too long for the
-// budget takes that continuation, two levels in so that a continued pattern is
-// not read as the case body.
+// budget takes that continuation, with every pattern at the indentation of the
+// first so that the body stays the only thing set in from them.
 func TestMatchPatternListBreaksAtItsCommas(t *testing.T) {
 	for _, test := range []struct{ name, source, want string }{
 		{
 			"a list over the budget takes a pattern per line",
 			"func f(value):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, Node.NOTIFICATION_EXIT_TREE, Node.NOTIFICATION_READY, Node.NOTIFICATION_PAUSED:\n\t\t\treturn \"lifecycle\"\n",
-			"func f(value):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\t\t\tNode.NOTIFICATION_EXIT_TREE, \\\n\t\t\t\tNode.NOTIFICATION_READY, \\\n\t\t\t\tNode.NOTIFICATION_PAUSED:\n\t\t\treturn \"lifecycle\"\n",
+			"func f(value):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\tNode.NOTIFICATION_EXIT_TREE, \\\n\t\tNode.NOTIFICATION_READY, \\\n\t\tNode.NOTIFICATION_PAUSED:\n\t\t\treturn \"lifecycle\"\n",
 		},
 		{
 			"a list that fits stays on its line",
@@ -37,19 +37,19 @@ func TestMatchPatternListBreaksAtItsCommas(t *testing.T) {
 			// pattern, which is the one the colon follows too.
 			"a guard follows the last pattern",
 			"func f(value, flag):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, Node.NOTIFICATION_EXIT_TREE, Node.NOTIFICATION_READY when flag:\n\t\t\treturn \"lifecycle\"\n",
-			"func f(value, flag):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\t\t\tNode.NOTIFICATION_EXIT_TREE, \\\n\t\t\t\tNode.NOTIFICATION_READY when flag:\n\t\t\treturn \"lifecycle\"\n",
+			"func f(value, flag):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\tNode.NOTIFICATION_EXIT_TREE, \\\n\t\tNode.NOTIFICATION_READY when flag:\n\t\t\treturn \"lifecycle\"\n",
 		},
 		{
 			// A guard is measured with the patterns, so a list that would fit
 			// alone still breaks when the guard pushes the arm over.
 			"a guard counts towards the budget",
 			"func f(value, flag):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, Node.NOTIFICATION_EXIT_TREE when flag and value != Node.NOTIFICATION_READY:\n\t\t\treturn \"lifecycle\"\n",
-			"func f(value, flag):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\t\t\tNode.NOTIFICATION_EXIT_TREE when flag and value != Node.NOTIFICATION_READY:\n\t\t\treturn \"lifecycle\"\n",
+			"func f(value, flag):\n\tmatch value:\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\tNode.NOTIFICATION_EXIT_TREE when flag and value != Node.NOTIFICATION_READY:\n\t\t\treturn \"lifecycle\"\n",
 		},
 		{
 			"an annotation on the case keeps its own line",
 			"func f(value):\n\tmatch value:\n\t\t_:\n\t\t\treturn \"other\"\n\t\t@warning_ignore(\"unreachable_pattern\")\n\t\tNode.NOTIFICATION_ENTER_TREE, Node.NOTIFICATION_EXIT_TREE, Node.NOTIFICATION_READY, Node.NOTIFICATION_PAUSED:\n\t\t\treturn \"lifecycle\"\n",
-			"func f(value):\n\tmatch value:\n\t\t_:\n\t\t\treturn \"other\"\n\t\t@warning_ignore(\"unreachable_pattern\")\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\t\t\tNode.NOTIFICATION_EXIT_TREE, \\\n\t\t\t\tNode.NOTIFICATION_READY, \\\n\t\t\t\tNode.NOTIFICATION_PAUSED:\n\t\t\treturn \"lifecycle\"\n",
+			"func f(value):\n\tmatch value:\n\t\t_:\n\t\t\treturn \"other\"\n\t\t@warning_ignore(\"unreachable_pattern\")\n\t\tNode.NOTIFICATION_ENTER_TREE, \\\n\t\tNode.NOTIFICATION_EXIT_TREE, \\\n\t\tNode.NOTIFICATION_READY, \\\n\t\tNode.NOTIFICATION_PAUSED:\n\t\t\treturn \"lifecycle\"\n",
 		},
 		{
 			// The arm is wide because of a nested list, not because of the

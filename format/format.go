@@ -483,22 +483,19 @@ func (p *printer) matchCase(matchCase ast.MatchCase) doc {
 	return concat(closeAfter(header, ":"), p.suite(matchCase.Body))
 }
 
-// matchPatternContinuation is the indentation of the continuation lines of a
-// pattern list. The style guide asks for two levels everywhere but inside
-// arrays, dictionaries, and enums, and here two levels are also what tells a
-// continued pattern from the case body, which sits one level in. The last
-// pattern carries no backslash, so the colon that closes the list stays
-// readable at that depth.
-const matchPatternContinuation = 2
-
 // matchPatternSeparator renders the comma between two patterns. A bare line
 // break inside a pattern list ends the list as far as Godot is concerned, and a
 // parenthesized group is not a pattern, so a backslash continuation is the only
-// way the list can be broken. Only the break between two patterns is indented,
-// so that a bracketed pattern breaking inside itself keeps its own
-// indentation.
+// way the list can be broken.
+//
+// A continued pattern is not indented, so the patterns of one case line up
+// however many lines they take and the body stays the only thing set in from
+// them. The style guide asks for two levels on a continuation to keep it from
+// reading as a block, which here would set the patterns in deeper than the body
+// they guard; the trailing backslash already says the line continues, and it
+// says so at the end of the line, where the eye leaves it.
 func matchPatternSeparator() doc {
-	return nest(matchPatternContinuation, concat(text(","), ifBroken(text(" \\"), text("")), spaceLine))
+	return concat(text(","), ifBroken(text(" \\"), text("")), spaceLine)
 }
 
 // layout describes how a bracketed construct is broken across lines.
