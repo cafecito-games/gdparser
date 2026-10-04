@@ -800,75 +800,129 @@ func (p *printer) parameter(parameter ast.Parameter) doc {
 	return concat(text(header+operator), p.expression(parameter.Default, 0))
 }
 
-// parenthesizedChain renders a chain of binary operators inside the parentheses
-// precedence requires around it, breaking before each operator so that it starts
-// its continuation line. The chain breaks only when it cannot fit the line by
-// itself: where a call after it could take the break instead, the chain is the
-// shorter read and stays whole.
-func (p *printer) parenthesizedChain(binary *ast.BinaryExpression) doc {
-	var parts []doc
-	p.inBrackets(func() { parts = p.chainParts(binary) })
-	body := nest(2, concat(softLine, concat(parts...)))
-	closing := doc(softLine)
-	if endsWithLineComment(body) {
-		closing = hardLine
+// chain is a run of operators that bind at one level, held as the operands they
+// separate so that it can be rendered either whole or broken before each
+// operator. Operator i stands between operands i and i+1.
+type chain struct {
+	operands  []doc
+	operators []string
+}
+
+// whole renders the chain on one line.
+func (c chain) whole() doc {
+	parts := []doc{c.operands[0]}
+	for index, operator := range c.operators {
+		parts = append(parts, text(" "+operator+" "), c.operands[index+1])
 	}
+	return concat(parts...)
+}
+
+// broken renders the chain with a break before each operator, so that the
+// operator starts its continuation line rather than ending the line above it.
+func (c chain) broken() doc {
+	parts := []doc{c.operands[0]}
+	for index, operator := range c.operators {
+		parts = append(parts, spaceLine, text(operator+" "), c.operands[index+1])
+	}
+	return concat(parts...)
+}
+
+// holdsABreak reports whether any operand can continue across lines on its own.
+func (c chain) holdsABreak() bool {
+	for _, operand := range c.operands {
+		if holdsABreak(operand) {
+			return true
+		}
+	}
+	return false
+}
+
+// parenthesizedChain renders a chain inside the parentheses precedence requires
+// around it, breaking before each operator. The chain breaks only when it cannot
+// fit the line by itself: where a call after it could take the break instead, the
+// chain is the shorter read and stays whole.
+func parenthesizedChain(links chain) doc {
+	body, closing := chainBody(links)
 	return yieldingGroup(concat(text("("), body, closing, text(")")))
 }
 
-// chainParts flattens a chain of binary operators that bind at one level into
-// operands separated by breakable operators. Every binary operator is
-// left-associative, so the chain runs down the left operands.
-func (p *printer) chainParts(binary *ast.BinaryExpression) []doc {
-	operator := p.operatorText(binary.Operator)
-	precedence := ast.OperatorPrecedence(operator)
-	var parts []doc
-	left, ok := binary.Left.(*ast.BinaryExpression)
-	if ok && ast.OperatorPrecedence(p.operatorText(left.Operator)) == precedence {
-		parts = p.chainParts(left)
-	} else {
-		parts = append(parts, p.expression(binary.Left, precedence))
-	}
-	return append(parts, spaceLine, text(operator+" "), p.expression(binary.Right, precedence+1))
-}
-
-// logicalChain renders a chain of one logical operator, breaking before each
-// keyword so that and/or starts its continuation line. A logical expression can
-// only continue across lines inside parentheses, so breaking always adds them
-// when precedence has not already required them.
-func (p *printer) logicalChain(binary *ast.BinaryExpression, parenthesize bool) doc {
-	var parts []doc
-	p.inBrackets(func() { parts = p.logicalParts(binary) })
-	body := nest(2, concat(softLine, concat(parts...)))
-	if parenthesize {
-		if endsWithLineComment(body) {
-			return group(concat(text("("), body, hardLine, text(")")))
-		}
-		return group(concat(text("("), body, softLine, text(")")))
-	}
-	if endsWithLineComment(body) {
-		return group(concat(ifBroken(text("("), text("")), body, hardLine, ifBroken(text(")"), text(""))))
-	}
-	return group(concat(
+// wrappedChain renders a chain that precedence has not parenthesized. An
+// expression can only continue across lines inside parentheses, so breaking
+// adds them.
+func wrappedChain(links chain) doc {
+	body, closing := chainBody(links)
+	return wrappingGroup(concat(
 		ifBroken(text("("), text("")),
 		body,
-		softLine,
+		closing,
 		ifBroken(text(")"), text("")),
 	))
 }
 
-// logicalParts flattens a chain of one logical operator into operands separated
-// by breakable operator keywords.
-func (p *printer) logicalParts(binary *ast.BinaryExpression) []doc {
+// chainBody returns the indented contents of a broken chain and the line that
+// closes them. Continuation lines are part of the same expression, so they take
+// two indentation levels.
+func chainBody(links chain) (doc, doc) {
+	body := nest(2, concat(softLine, links.broken()))
+	if endsWithLineComment(body) {
+		return body, hardLine
+	}
+	return body, softLine
+}
+
+// chainOperands renders the operands of a chain, counting the chain as a bracket
+// around them only where the parentheses are there by the time anything inside
+// can break. Where precedence requires them they are written outright, and a
+// logical chain that holds a line of its own cannot fit one, so it breaks and
+// writes them too. Any other chain stays whole wherever an operand holds such a
+// line, so the closing bracket of a construct inside it lands exactly where it
+// would have with no chain around it.
+func (p *printer) chainOperands(bracketed bool, render func()) {
+	if bracketed {
+		p.inBrackets(render)
+		return
+	}
+	render()
+}
+
+// binaryChain flattens a chain of binary operators that bind at one level into
+// the operands they separate. Every binary operator is left-associative, so the
+// chain runs down the left operands. An operand that binds tighter stays whole,
+// so a chain of mixed levels breaks only at its loosest operator and never reads
+// as though the parentheses had regrouped it.
+func (p *printer) binaryChain(binary *ast.BinaryExpression) chain {
 	operator := p.operatorText(binary.Operator)
 	precedence := ast.OperatorPrecedence(operator)
-	var parts []doc
-	if left, ok := binary.Left.(*ast.BinaryExpression); ok && p.operatorText(left.Operator) == operator {
-		parts = p.logicalParts(left)
+	var links chain
+	left, ok := binary.Left.(*ast.BinaryExpression)
+	if ok && ast.OperatorPrecedence(p.operatorText(left.Operator)) == precedence {
+		links = p.binaryChain(left)
 	} else {
-		parts = append(parts, p.expression(binary.Left, precedence))
+		links.operands = append(links.operands, p.expression(binary.Left, precedence))
 	}
-	return append(parts, spaceLine, text(operator+" "), p.expression(binary.Right, precedence+1))
+	links.operators = append(links.operators, operator)
+	links.operands = append(links.operands, p.expression(binary.Right, precedence+1))
+	return links
+}
+
+// ternaryChain flattens a conditional expression and the conditionals its
+// alternative continues into, separated by their "else" keywords. A value stays
+// with the condition that chooses it, which is the shape the style guide's own
+// wrapped conditional takes.
+func (p *printer) ternaryChain(ternary *ast.TernaryExpression) chain {
+	links := chain{operands: []doc{concat(
+		p.expression(ternary.Value, ast.PrecedenceTernary+1), text(" if "),
+		p.expression(ternary.Condition, ast.PrecedenceTernary),
+	)}}
+	links.operators = append(links.operators, "else")
+	if alternative, ok := ternary.Alternative.(*ast.TernaryExpression); ok {
+		rest := p.ternaryChain(alternative)
+		links.operands = append(links.operands, rest.operands...)
+		links.operators = append(links.operators, rest.operators...)
+		return links
+	}
+	links.operands = append(links.operands, p.expression(ternary.Alternative, ast.PrecedenceTernary))
+	return links
 }
 
 func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
@@ -905,31 +959,30 @@ func (p *printer) expression(expr ast.Expression, parentPrecedence int) doc {
 		return inner
 	case *ast.BinaryExpression:
 		operator := p.operatorText(node.Operator)
-		precedence := ast.OperatorPrecedence(operator)
-		// Every binary operator in GDScript is left-associative, so only the
-		// operand on the right has to bind tighter than the operator.
-		leftPrecedence, rightPrecedence := precedence, precedence+1
-		if isLogicalOperator(operator) {
-			return p.logicalChain(node, precedence < parentPrecedence)
+		parenthesize := ast.OperatorPrecedence(operator) < parentPrecedence
+		// The style guide names where and/or belongs on a continuation line, so
+		// a logical chain takes the break even when something inside it could.
+		logical := isLogicalOperator(operator)
+		var links chain
+		p.chainOperands(parenthesize || logical, func() { links = p.binaryChain(node) })
+		if parenthesize {
+			return parenthesizedChain(links)
 		}
-		if precedence < parentPrecedence {
-			return p.parenthesizedChain(node)
+		if !logical && links.holdsABreak() {
+			return links.whole()
 		}
-		return concat(
-			p.expression(node.Left, leftPrecedence),
-			text(" "+operator+" "),
-			p.expression(node.Right, rightPrecedence),
-		)
+		return wrappedChain(links)
 	case *ast.TernaryExpression:
-		inner := concat(
-			p.expression(node.Value, ast.PrecedenceTernary+1), text(" if "),
-			p.expression(node.Condition, ast.PrecedenceTernary), text(" else "),
-			p.expression(node.Alternative, ast.PrecedenceTernary),
-		)
-		if ast.PrecedenceTernary < parentPrecedence {
-			return parenthesized(inner)
+		parenthesize := ast.PrecedenceTernary < parentPrecedence
+		var links chain
+		p.chainOperands(parenthesize, func() { links = p.ternaryChain(node) })
+		if parenthesize {
+			return parenthesizedChain(links)
 		}
-		return inner
+		if links.holdsABreak() {
+			return links.whole()
+		}
+		return wrappedChain(links)
 	case *ast.CallExpression:
 		return concat(
 			p.expression(node.Callee, ast.PrecedenceCall),
