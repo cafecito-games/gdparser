@@ -115,6 +115,22 @@ func TestOperatorChainBreaksWhereABracketItHoldsCannotSaveTheLine(t *testing.T) 
 			"func describe(first: int, second: int) -> String:\n\treturn \"a format string that is already wider than the whole column budget allows for, with %d and %d in it\" % [first, second]\n",
 			"func describe(first: int, second: int) -> String:\n\treturn \"a format string that is already wider than the whole column budget allows for, with %d and %d in it\" % [\n\t\tfirst,\n\t\tsecond,\n\t]\n",
 		},
+		{
+			// The operand is a chain of its own that holds a call, and it is the
+			// loosest operator that breaks: the inner chain stays whole on the
+			// line it is given, as it would anywhere else that line fits.
+			"a chain whose operand is a chain that holds a call",
+			"func nested(first: int, second: int) -> void:\n\tassert_equal(first, \"the first half of a message that is already quite long, \" + second * describe_the_value(first, second) + \"a tail\")\n",
+			"func nested(first: int, second: int) -> void:\n\tassert_equal(\n\t\t\tfirst,\n\t\t\t(\n\t\t\t\t\t\"the first half of a message that is already quite long, \"\n\t\t\t\t\t+ second * describe_the_value(first, second)\n\t\t\t\t\t+ \"a tail\"\n\t\t\t)\n\t)\n",
+		},
+		{
+			// The comment ends the line the call's bracket is on, which is the
+			// line the chain's own measurement runs into, so it is measured and
+			// then left where it was written.
+			"a chain whose statement ends in a comment",
+			"func commented(first: int) -> void:\n\tassert_equal(first, \"the first half of a message that is already quite long, \" + \"and a second half that pushes the pair past the budget\" + str(first))  # why\n",
+			"func commented(first: int) -> void:\n\tassert_equal(\n\t\t\tfirst,\n\t\t\t(\n\t\t\t\t\t\"the first half of a message that is already quite long, \"\n\t\t\t\t\t+ \"and a second half that pushes the pair past the budget\"\n\t\t\t\t\t+ str(first)\n\t\t\t)\n\t)  # why\n",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			assertFormats(t, "nested.gd", test.source, test.want)
