@@ -870,11 +870,13 @@ func chainBody(links chain) (doc, doc) {
 	return body, softLine
 }
 
-// chainOperands renders the operands of a chain, counting the chain as a
-// bracket around them only when it is certain to have one. A chain that adds its
-// own parentheses as it breaks stays whole wherever an operand holds a line of
-// its own, so the closing bracket of a construct inside it lands exactly where
-// it would have with no chain around it.
+// chainOperands renders the operands of a chain, counting the chain as a bracket
+// around them only where the parentheses are there by the time anything inside
+// can break. Where precedence requires them they are written outright, and a
+// logical chain that holds a line of its own cannot fit one, so it breaks and
+// writes them too. Any other chain stays whole wherever an operand holds such a
+// line, so the closing bracket of a construct inside it lands exactly where it
+// would have with no chain around it.
 func (p *printer) chainOperands(bracketed bool, render func()) {
 	if bracketed {
 		p.inBrackets(render)

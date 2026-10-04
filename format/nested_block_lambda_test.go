@@ -56,6 +56,24 @@ func TestBlockLambdaEndingANestedCollectionKeepsItsComma(t *testing.T) {
 			"func f(a):\n\tvar x = a + g(\n\t\t\tfunc():\n\t\t\t\tpass\n\t)\n",
 		},
 		{
+			// Precedence requires the parentheses here, so the chain is sure of
+			// them: the bracket of the call inside it sits at a continuation
+			// indentation, where the comma is what ends the lambda's block.
+			"a call in a chain precedence has parenthesized",
+			format.GodotStyle(),
+			"func f(a, b):\n\tvar x = (a + g(func():\n\t\tpass)) * 2\n",
+			"func f(a, b):\n\tvar x = (\n\t\t\ta\n\t\t\t+ g(\n\t\t\t\t\tfunc():\n\t\t\t\t\t\tpass,\n\t\t\t)\n\t) * 2\n",
+		},
+		{
+			// A conditional expression leaves the break to the call as any other
+			// chain does, so its bracket lands at the statement's indentation
+			// and takes no comma.
+			"a call in a conditional expression",
+			format.GodotStyle(),
+			"func f(a, b):\n\tvar y = a if b else g(func():\n\t\tpass)\n",
+			"func f(a, b):\n\tvar y = a if b else g(\n\t\t\tfunc():\n\t\t\t\tpass\n\t)\n",
+		},
+		{
 			"a call in a logical chain",
 			format.GodotStyle(),
 			"func f(a):\n\tvar x = a and h(func():\n\t\tpass)\n",
