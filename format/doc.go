@@ -23,6 +23,10 @@ type docGroup struct {
 	// after it breaks. A yielding group so stays on one line when it fits there
 	// itself, and leaves a break still needed to a group that follows it.
 	yielding bool
+	// wrapping says the group writes the parentheses that let its contents
+	// continue across lines, so breaking it adds punctuation the expression did
+	// not have. Such a group is not a break another group can leave itself to.
+	wrapping bool
 }
 
 // docNest adds indentation levels to the breaks inside it.
@@ -96,9 +100,7 @@ func join(separator doc, parts []doc) doc {
 func endsWithLineComment(d doc) bool {
 	switch node := d.(type) {
 	case docText:
-		// A trailing comment is emitted with the spaces that separate it from
-		// the code it follows, so the marker is not necessarily first.
-		return strings.HasPrefix(strings.TrimLeft(node.text, " \t"), "#")
+		return isComment(node.text)
 	case docConcat:
 		if len(node.parts) == 0 {
 			return false
@@ -115,9 +117,77 @@ func endsWithLineComment(d doc) bool {
 	}
 }
 
+// isComment reports whether value is a comment. A trailing comment is emitted
+// with the spaces that separate it from the code it follows, so the marker is
+// not necessarily first.
+func isComment(value string) bool {
+	return strings.HasPrefix(strings.TrimLeft(value, " \t"), "#")
+}
+
 func group(inner doc) doc { return docGroup{inner: inner} }
 
 func yieldingGroup(inner doc) doc { return docGroup{inner: inner, yielding: true} }
+
+func wrappingGroup(inner doc) doc {
+	return docGroup{inner: inner, yielding: true, wrapping: true}
+}
+
+// holdsABreak reports whether document can continue across lines within brackets
+// it already has, either because they were written or because precedence
+// requires them. A group that writes its own parentheses as it breaks does not
+// count: a construct around it would rather leave the break to brackets than add
+// punctuation of its own.
+func holdsABreak(document doc) bool {
+	switch node := document.(type) {
+	case docConcat:
+		for _, part := range node.parts {
+			if holdsABreak(part) {
+				return true
+			}
+		}
+	case docNest:
+		return holdsABreak(node.inner)
+	case docGroup:
+		if node.wrapping {
+			return holdsABreak(node.inner)
+		}
+		return holdsALine(node.inner)
+	case docIfBreak:
+		return holdsABreak(node.broken) || holdsABreak(node.flat)
+	case docLine:
+		// A hard line is taken wherever it stands, with no bracket needed to
+		// make the continuation legal.
+		return node.kind == lineHard
+	case docText:
+		// A literal that already spans lines, such as a triple-quoted string,
+		// continues across them on its own.
+		return strings.Contains(node.text, "\n")
+	}
+	return false
+}
+
+// holdsALine reports whether document has a line the group around it can take.
+func holdsALine(document doc) bool {
+	switch node := document.(type) {
+	case docConcat:
+		for _, part := range node.parts {
+			if holdsALine(part) {
+				return true
+			}
+		}
+	case docNest:
+		return holdsALine(node.inner)
+	case docGroup:
+		return holdsALine(node.inner)
+	case docIfBreak:
+		return holdsALine(node.broken) || holdsALine(node.flat)
+	case docLine:
+		return true
+	case docText:
+		return strings.Contains(node.text, "\n")
+	}
+	return false
+}
 
 func nest(levels int, inner doc) doc { return docNest{levels: levels, inner: inner} }
 

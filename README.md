@@ -299,11 +299,22 @@ lines.
 
 A construct that does not fit the column budget is broken one element per line.
 Call arguments, parameter lists, and conditions indent two levels, while arrays,
-dictionaries, and enums indent one, as the guide prescribes. Breaking a logical
-expression wraps it in parentheses and starts each continuation line with its
-`and` or `or` keyword. Operands that precedence already parenthesizes, as in
-`(a + b) * c`, break the same way, before each operator, when they do not fit the
-line themselves.
+dictionaries, and enums indent one, as the guide prescribes.
+
+A chain of operators that does not fit the line is broken before each operator,
+so the operator starts its continuation line rather than ending the line above
+it, and a conditional expression breaks before each `else`. An expression can
+only continue across lines inside parentheses, so a chain that precedence has
+not already parenthesized, as in `a + b + c`, gains its own as it breaks, while
+one that it has, as in `(a + b) * c`, breaks inside them. Only operators that
+bind at one level share a chain, so a chain of mixed levels breaks at its
+loosest operator and never reads as though the parentheses had regrouped it.
+
+Where the expression already holds brackets that can take the break — a call's
+arguments, a collection, or the parentheses precedence requires — the chain
+leaves the break to them and stays whole, rather than adding punctuation the
+source did not have. An `and`/`or` chain takes the break even then, since the
+guide names where its keyword belongs on a continuation line.
 
 `format.FileWithOptions` takes a `format.Options` for tools that need to differ.
 Every field's zero value is the style guide default, so a partially populated
