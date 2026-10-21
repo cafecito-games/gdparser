@@ -101,7 +101,7 @@ func (f *formatter) value(value Value) {
 		case math.IsInf(n.Value, 1):
 			f.b.WriteString("inf")
 		case math.IsInf(n.Value, -1):
-			f.b.WriteString("-inf")
+			f.b.WriteString("inf_neg")
 		default:
 			s := strconv.FormatFloat(n.Value, 'g', -1, 64)
 			if !strings.ContainsAny(s, ".eE") {

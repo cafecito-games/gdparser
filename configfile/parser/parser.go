@@ -240,7 +240,7 @@ func (p *parser) parseExpression() (ast.Expression, error) {
 			return &ast.NullLiteral{Base: base(current.Span)}, nil
 		case "true", "false":
 			return &ast.BoolLiteral{Base: base(current.Span), Value: strings.EqualFold(current.Lexeme, "true")}, nil
-		case "nan", "inf":
+		case "nan", "inf", "inf_neg":
 			return &ast.FloatLiteral{Base: base(current.Span), Raw: strings.ToLower(current.Lexeme)}, nil
 		}
 		if current.Lexeme == "Array" && p.at(token.LBracket) {
