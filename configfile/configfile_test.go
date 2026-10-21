@@ -288,6 +288,33 @@ InputEventKey,
 	}
 }
 
+func TestSpecialFloatIdentifiers(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		raw    string
+	}{
+		{"x=inf\n", "inf"},
+		{"x=inf_neg\n", "inf_neg"},
+		{"x=nan\n", "nan"},
+	} {
+		file, err := configfile.ParseString(test.source)
+		if err != nil {
+			t.Fatalf("ParseString(%q): %v", test.source, err)
+		}
+		assignment := file.Preamble[0].(*ast.Assignment)
+		literal, ok := assignment.Value.(*ast.FloatLiteral)
+		if !ok {
+			t.Fatalf("%q = %T, want *FloatLiteral", test.source, assignment.Value)
+		}
+		if literal.Raw != test.raw {
+			t.Fatalf("%q raw = %q, want %q", test.source, literal.Raw, test.raw)
+		}
+		if !strings.Contains(configfile.Format(file), test.raw) {
+			t.Fatalf("formatted %q lacks %q", test.source, test.raw)
+		}
+	}
+}
+
 func TestPositionedErrorsDoNotPanic(t *testing.T) {
 	badSources := []string{
 		"[application\n",

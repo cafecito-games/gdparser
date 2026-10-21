@@ -190,7 +190,7 @@ func (p *parser) parseValue() (Value, error) {
 			return &FloatValue{Base: Base{tok.span}, Value: math.NaN()}, nil
 		case "inf", "+inf":
 			return &FloatValue{Base: Base{tok.span}, Value: math.Inf(1)}, nil
-		case "-inf":
+		case "-inf", "inf_neg":
 			return &FloatValue{Base: Base{tok.span}, Value: math.Inf(-1)}, nil
 		}
 		if (tok.text == "Array" || tok.text == "Dictionary") && p.at(tLBracket) {

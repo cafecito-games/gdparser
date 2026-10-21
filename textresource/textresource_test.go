@@ -2,6 +2,7 @@ package textresource
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,43 @@ fallbacks = Array[ExtResource("1")]([])
 	}
 	if !strings.Contains(string(encoded), `"kind":"TypedDictionaryValue"`) {
 		t.Fatalf("JSON lacks node discriminator: %s", encoded)
+	}
+}
+
+func TestSpecialFloatValues(t *testing.T) {
+	parse := func(value string) (Value, string) {
+		t.Helper()
+		document, err := ParseString("[gd_resource type=\"Resource\"]\n\n[resource]\nx = " + value + "\n")
+		if err != nil {
+			t.Fatalf("ParseString(%q): %v", value, err)
+		}
+		section := document.Items[1].(*Section)
+		assignment := section.Body[0].(*Assignment)
+		return assignment.Value, Format(document)
+	}
+
+	// Godot writes inf_neg for negative infinity. It must parse as a FloatValue
+	// and canonicalize to inf_neg rather than the non-Godot "-inf" spelling.
+	value, formatted := parse("inf_neg")
+	float, ok := value.(*FloatValue)
+	if !ok {
+		t.Fatalf("inf_neg = %T, want *FloatValue", value)
+	}
+	if !math.IsInf(float.Value, -1) {
+		t.Fatalf("inf_neg value = %v, want -Inf", float.Value)
+	}
+	if !strings.Contains(formatted, "x = inf_neg\n") {
+		t.Fatalf("formatted = %q, want x = inf_neg", formatted)
+	}
+
+	// A legacy "-inf" spelling parses to the same value and canonicalizes to
+	// inf_neg, matching Godot's own writer.
+	value, formatted = parse("-inf")
+	if _, ok := value.(*FloatValue); !ok {
+		t.Fatalf("-inf = %T, want *FloatValue", value)
+	}
+	if !strings.Contains(formatted, "x = inf_neg\n") {
+		t.Fatalf("formatted = %q, want x = inf_neg", formatted)
 	}
 }
 
