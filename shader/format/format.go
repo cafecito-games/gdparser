@@ -464,8 +464,7 @@ func expressionPrecedence(expr ast.Expression) int {
 	case *ast.ConditionalExpression:
 		return 2
 	case *ast.BinaryExpression:
-		p, _, _ := operatorPrecedence(n.Operator)
-		return p
+		return operatorPrecedence(n.Operator)
 	case *ast.UnaryExpression:
 		return 14
 	case *ast.PostfixExpression, *ast.CallExpression, *ast.MemberExpression, *ast.IndexExpression:
@@ -483,30 +482,30 @@ func rightAssociative(expr ast.Expression) bool {
 	}
 	return false
 }
-func operatorPrecedence(op string) (int, bool, bool) {
+func operatorPrecedence(op string) int {
 	switch op {
 	case "||":
-		return 3, false, false
+		return 3
 	case "^^":
-		return 4, false, false
+		return 4
 	case "&&":
-		return 5, false, false
+		return 5
 	case "|":
-		return 6, false, false
+		return 6
 	case "^":
-		return 7, false, false
+		return 7
 	case "&":
-		return 8, false, false
+		return 8
 	case "==", "!=":
-		return 9, false, false
+		return 9
 	case "<", "<=", ">", ">=":
-		return 10, false, false
+		return 10
 	case "<<", ">>":
-		return 11, false, false
+		return 11
 	case "+", "-":
-		return 12, false, false
+		return 12
 	case "*", "/", "%":
-		return 13, false, false
+		return 13
 	}
-	return 0, false, false
+	return 0
 }
