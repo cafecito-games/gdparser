@@ -690,11 +690,15 @@ func comment(t token.Token) *ast.Comment {
 }
 func directive(t token.Token) *ast.PreprocessorDirective {
 	text := strings.TrimSpace(strings.TrimPrefix(t.Text, "#"))
-	name, body, _ := strings.Cut(text, " ")
-	if body == "" {
-		name, body, _ = strings.Cut(text, "\t")
+	name, body := text, ""
+	// Split the name from the body at the first space or tab. Cutting on a
+	// single character first (space, then tab) misreads a directive such as
+	// "#define\tMAX 4", whose name would otherwise swallow the tab and "MAX".
+	if index := strings.IndexAny(text, " \t"); index >= 0 {
+		name = text[:index]
+		body = strings.TrimSpace(text[index+1:])
 	}
-	return &ast.PreprocessorDirective{Base: ast.Base{SourceSpan: t.Span}, Name: name, Body: strings.TrimSpace(body)}
+	return &ast.PreprocessorDirective{Base: ast.Base{SourceSpan: t.Span}, Name: name, Body: body}
 }
 func base(a, b token.Token) ast.Base   { return ast.Base{SourceSpan: join(a, b)} }
 func join(a, b token.Token) token.Span { return token.Span{Start: a.Span.Start, End: b.Span.End} }
